@@ -133,8 +133,8 @@ class TcpServer
     }
 
     /**
-     * Process a complete message
-     */
+    * Process a complete message
+    */
     private function processMessage(string $connectionId, array $rawBytes): void
     {
         $hexMessage = ProtocolHelper::bytesToHexString($rawBytes);
@@ -149,6 +149,24 @@ class TcpServer
 
         $header = $message['header'];
         $body = $message['body'];
+
+        /* 
+        |--------------------------------------------------------------------------
+        | AGREGADO: Envío de datos a la vista Web (WebSockets)
+        |--------------------------------------------------------------------------
+        | Enviamos el mensaje procesado al evento MdvrMessageReceived.
+        | Esto permitirá que el texto plano aparezca en tu navegador.
+        */
+        event(new \App\Events\MdvrMessageReceived([
+            'phoneNumber' => $header['phoneNumber'],
+            'messageId'   => $header['messageIdHex'],
+            'body'        => $body, // Aquí van los datos traducidos o crudos
+            'time'        => now()->format('H:i:s'),
+            'hex'         => $hexMessage // Útil para ver la trama original en la web
+        ]));
+        /* 
+        |--------------------------------------------------------------------------
+        */
 
         $this->log("Message ID: {$header['messageIdHex']}, Phone: {$header['phoneNumber']}, Serial: {$header['serialNumber']}");
 

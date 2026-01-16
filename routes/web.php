@@ -32,3 +32,7 @@ Route::prefix('mdvr')->name('mdvr.')->group(function () {
         Route::get('/devices/{device}/locations', [MdvrController::class, 'apiDeviceLocations'])->name('device.locations');
     });
 });
+
+Route::get('/mdvr-live', function () {
+    return view('mdvr_live');
+});
