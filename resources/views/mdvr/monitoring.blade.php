@@ -308,13 +308,15 @@
                     </div>
                     <div class="grid grid-cols-4 gap-2 mb-2">
                         <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-yellow-400"></span>
-                            <span class="text-xs">1</span></div>
+                            <span class="text-xs">1</span>
+                        </div>
                         <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-gray-600"></span> <span
                                 class="text-xs">0</span></div>
                         <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-gray-600"></span> <span
                                 class="text-xs">0</span></div>
                         <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-yellow-400"></span>
-                            <span class="text-xs">1</span></div>
+                            <span class="text-xs">1</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -389,70 +391,206 @@
 
 @push('scripts')
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-        // Initialize map
+    @vite(['resources/js/app.js'])
+    <script type="module">
+        // ============================================
+        // MAPA Y MARCADORES
+        // ============================================
         const map = L.map('map', {
-            zoomControl: false // Move zoom control if needed
-        }).setView([20.65469, -100.29212], 13);
+            zoomControl: false
+        }).setView([20.65469, -100.29212], 6); // Vista inicial de México
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        // Add custom zoom control to right side
         L.control.zoom({
             position: 'topright'
         }).addTo(map);
 
-        // Dummy Markers
-        const locations = [{
-                lat: 20.65469,
-                lng: -100.29212,
-                active: true
-            },
-            {
-                lat: 19.4326,
-                lng: -99.1332,
-                active: false
-            },
-            {
-                lat: 25.6866,
-                lng: -100.3161,
-                active: false
-            }
-        ];
+        // Almacén de marcadores por teléfono
+        const deviceMarkers = new Map();
+        const deviceData = new Map();
 
-        locations.forEach((loc, index) => {
-            const icon = L.divIcon({
+        // ============================================
+        // FUNCIONES DE MARCADORES
+        // ============================================
+        function createMarkerIcon(isOnline = true, direction = 0) {
+            const color = isOnline ? '#10B981' : '#6B7280';
+            return L.divIcon({
                 className: 'custom-div-icon',
-                html: `<div class="vehicle-marker ${loc.active ? 'selected' : ''} bg-blue-500">
-                     <svg class="text-white w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path></svg>
-                   </div>`,
+                html: `<div class="vehicle-marker" style="background: ${color}; transform: rotate(${direction}deg);">
+                         <svg class="text-white w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path>
+                         </svg>
+                       </div>`,
                 iconSize: [32, 32],
                 iconAnchor: [16, 16]
             });
+        }
 
-            const marker = L.marker([loc.lat, loc.lng], {
-                icon: icon
-            }).addTo(map);
+        function updateOrCreateMarker(phoneNumber, lat, lng, data = {}) {
+            const direction = data.direction || 0;
+            const speed = data.speed || 0;
 
-            marker.on('click', () => {
-                selectDevice(index, loc.lat, loc.lng);
+            if (deviceMarkers.has(phoneNumber)) {
+                // Actualizar marcador existente
+                const marker = deviceMarkers.get(phoneNumber);
+                marker.setLatLng([lat, lng]);
+                marker.setIcon(createMarkerIcon(true, direction));
+
+                // Efecto visual de actualización
+                const el = marker.getElement();
+                if (el) {
+                    el.style.transition = 'all 0.5s ease';
+                }
+            } else {
+                // Crear nuevo marcador
+                const marker = L.marker([lat, lng], {
+                    icon: createMarkerIcon(true, direction)
+                }).addTo(map);
+
+                marker.on('click', () => {
+                    selectDevice(phoneNumber, lat, lng);
+                });
+
+                deviceMarkers.set(phoneNumber, marker);
+
+                // Centrar mapa en primer dispositivo
+                if (deviceMarkers.size === 1) {
+                    map.flyTo([lat, lng], 14);
+                }
+            }
+
+            // Guardar datos del dispositivo
+            deviceData.set(phoneNumber, {
+                lat,
+                lng,
+                speed: speed,
+                direction: direction,
+                lastUpdate: new Date(),
+                ...data
             });
+
+            // Actualizar lista de vehículos en sidebar
+            updateVehicleList(phoneNumber, data);
+        }
+
+        function updateVehicleList(phoneNumber, data) {
+            let listItem = document.querySelector(`[data-phone="${phoneNumber}"]`);
+
+            if (!listItem) {
+                // Crear nuevo elemento en la lista
+                const ul = document.querySelector('#left-panel ul');
+                listItem = document.createElement('li');
+                listItem.className = 'hover:bg-blue-50 cursor-pointer transition p-3 group device-item';
+                listItem.setAttribute('data-phone', phoneNumber);
+                listItem.onclick = () => {
+                    const d = deviceData.get(phoneNumber);
+                    if (d) selectDevice(phoneNumber, d.lat, d.lng);
+                };
+                ul.prepend(listItem);
+            }
+
+            const time = new Date().toLocaleTimeString('es-MX', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            listItem.innerHTML = `
+                <div class="flex items-start gap-3">
+                    <div class="mt-1 relative">
+                        <div class="w-8 h-8 rounded-full flex items-center justify-center bg-green-100 text-green-600">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                            </svg>
+                        </div>
+                        <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 border-2 border-white rounded-full bg-green-500 animate-pulse"></span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="font-bold text-gray-800 text-sm truncate">${phoneNumber}</p>
+                        <p class="text-xs text-gray-500 truncate mt-0.5">En línea - Transmitiendo</p>
+                        <p class="text-xs text-orange-500 font-medium mt-0.5">
+                            ${data.speed || 0} Km/h
+                            <span class="text-gray-400 mx-1">•</span>
+                            ${time}
+                        </p>
+                    </div>
+                    <div class="text-green-500">
+                        <svg class="w-4 h-4 animate-pulse" fill="currentColor" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="4"/>
+                        </svg>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ============================================
+        // WEBSOCKET - ESCUCHAR CANAL EN TIEMPO REAL
+        // ============================================
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('🚀 Iniciando conexión WebSocket...');
+
+            if (typeof window.Echo === 'undefined') {
+                console.error('❌ Echo no está definido. Verifica que Vite esté corriendo.');
+                return;
+            }
+
+            window.Echo.channel('mdvr-terminal')
+                .listen('MdvrMessageReceived', (e) => {
+                    console.log('📡 Datos recibidos:', e.data);
+
+                    const data = e.data;
+                    const phoneNumber = data.phoneNumber || 'Desconocido';
+
+                    // Si el mensaje contiene ubicación GPS (0x0200)
+                    if (data.messageId === '0200' && data.body) {
+                        const body = data.body;
+
+                        // Parsear coordenadas del body si existen
+                        if (body.latitude && body.longitude) {
+                            updateOrCreateMarker(phoneNumber, body.latitude, body.longitude, {
+                                speed: body.speed || 0,
+                                direction: body.direction || 0,
+                                messageId: data.messageId
+                            });
+                        }
+                    }
+
+                    // Mostrar notificación de datos recibidos
+                    showDataNotification(data);
+                });
+
+            console.log('✅ Escuchando canal mdvr-terminal');
         });
 
-        // Select Device Function
-        function selectDevice(id, lat, lng) {
-            // Show detail card
+        // ============================================
+        // NOTIFICACIONES Y UI
+        // ============================================
+        function showDataNotification(data) {
+            // Crear elemento de notificación temporal
+            const notification = document.createElement('div');
+            notification.className =
+                'fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg text-sm z-50 animate-pulse';
+            notification.innerHTML = `📡 ${data.phoneNumber}: ${data.messageId} @ ${data.time}`;
+            document.body.appendChild(notification);
+
+            setTimeout(() => notification.remove(), 3000);
+        }
+
+        function selectDevice(phoneNumber, lat, lng) {
             const card = document.getElementById('detail-card');
             card.style.display = 'block';
-
-            // Center map
             map.flyTo([lat, lng], 15);
 
-            // Update Title (Dummy Action)
-            document.getElementById('card-title').textContent = "Vehículo " + id;
-            document.getElementById('panel-title').textContent = "Vehículo " + id;
+            const data = deviceData.get(phoneNumber) || {};
+            document.getElementById('card-title').textContent = phoneNumber;
+            document.getElementById('panel-title').textContent = phoneNumber;
+
+            // Actualizar coordenadas en la tarjeta
+            const coordsLink = card.querySelector('a.text-blue-600');
+            if (coordsLink) {
+                coordsLink.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+            }
         }
 
         function toggleRightPanel() {
@@ -464,5 +602,9 @@
             }
             setTimeout(() => map.invalidateSize(), 300);
         }
+
+        // Exponer funciones globalmente para onclick
+        window.selectDevice = selectDevice;
+        window.toggleRightPanel = toggleRightPanel;
     </script>
 @endpush
