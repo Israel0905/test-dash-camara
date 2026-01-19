@@ -270,13 +270,13 @@ class TcpServer
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
 
-        // Send registration response (0x8100) with result=1 (vehicle already registered)
+        // Send registration response (0x8100) with result=3 (terminal already registered)
         // This should trigger the device to send authentication (0x0102) with its stored auth code
         $phoneRawBytes = $header['phoneNumberRaw'];
-        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 1, '');
+        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 3, '');
         $this->sendResponse($connectionId, $response);
 
-        $this->log('Registration response sent - Result: 1 (Vehicle already registered)');
+        $this->log('Registration response sent - Result: 3 (Terminal already registered)');
     }
 
     /**
