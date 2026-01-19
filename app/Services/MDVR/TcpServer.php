@@ -257,21 +257,7 @@ class TcpServer
         $this->log("Registration - Manufacturer: {$manufacturerId}, Model: {$terminalModel}, ID: {$terminalId}, Plate: {$plateNumber}");
 
 
-        // Check if device already registered
-        $isReregistration = isset($this->devices[$phoneNumber]['authCode']);
-        
-        if ($isReregistration) {
-            $authCode = $this->devices[$phoneNumber]['authCode'];
-            $this->log("Device already registered - returning result=3 (already registered)");
-            
-            // Send registration response with result=3 (terminal already registered)
-            // This tells the camera to use its existing auth code
-            $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 3, '');
-            $this->sendResponse($connectionId, $response);
-            return;
-        }
-        
-        // First time registration - generate fixed auth code
+        // Generate fixed auth code based on device phone number (deterministic)
         $authCode = substr(md5('mdvr_auth_' . $phoneNumber), 0, 16);
 
         // Store device info
@@ -285,7 +271,8 @@ class TcpServer
             'authCode' => $authCode,
         ];
 
-        // Send registration response (0x8100) - result 0 = success
+        // Send registration response (0x8100) - always result=0 with auth code
+        // Per Ultravision doc: result=0 means success, device should then authenticate with 0x0102
         $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 0, $authCode);
         $this->sendResponse($connectionId, $response);
 
