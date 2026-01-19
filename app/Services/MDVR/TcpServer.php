@@ -259,9 +259,6 @@ class TcpServer
 
         $this->log("Registration - Manufacturer: {$manufacturerId}, Model: {$terminalModel}, ID: {$terminalId}, Plate: {$plateNumber}");
 
-        // Use simple numeric auth code - standard for Chinese MDVR devices
-        $authCode = '123456';
-
         // Store device info
         $this->devices[$phoneNumber] = [
             'manufacturerId' => $manufacturerId,
@@ -270,17 +267,16 @@ class TcpServer
             'plateNumber' => $plateNumber,
             'plateColor' => $plateColor,
             'registeredAt' => date('Y-m-d H:i:s'),
-            'authCode' => $authCode,
-            'phoneNumberRaw' => $header['phoneNumberRaw'],  // Store raw bytes
+            'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
 
-        // Send registration response (0x8100) using RAW phone bytes
-        // CRITICAL: Must use exact same phone bytes that device sent
+        // Send registration response (0x8100) with result=1 (vehicle already registered)
+        // This should trigger the device to send authentication (0x0102) with its stored auth code
         $phoneRawBytes = $header['phoneNumberRaw'];
-        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 0, $authCode);
+        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 1, '');
         $this->sendResponse($connectionId, $response);
 
-        $this->log("Registration successful - Auth code: {$authCode}");
+        $this->log('Registration response sent - Result: 1 (Vehicle already registered)');
     }
 
     /**
