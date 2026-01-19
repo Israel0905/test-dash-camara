@@ -273,13 +273,15 @@ class TcpServer
         $authCode = $phoneNumber;
         $this->devices[$phoneNumber]['authCode'] = '';
 
-        // Send registration response (0x8100) with result=1 (Vehicle already registered)
-        // With result != 0, no auth code is sent
+        // Send registration response (0x8100) with result=0 and 123456 as auth code
+        $authCode = '123456';
+        $this->devices[$phoneNumber]['authCode'] = $authCode;
+
         $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
             $header['phoneNumberRaw'],
             $header['serialNumber'],
-            1, // Result: 1 = Vehicle already registered
-            '' // No auth code needed
+            0, // Result: 0 = Success
+            $authCode
         );
         $this->sendResponse($connectionId, $response);
 
