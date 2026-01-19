@@ -271,11 +271,16 @@ class TcpServer
         ];
         // Use Phone Number (992002) with Padding 00 format
         $authCode = $phoneNumber;
-        $this->devices[$phoneNumber]['authCode'] = $authCode;
+        $this->devices[$phoneNumber]['authCode'] = '';
 
-        // Send registration response (0x8100) with result=0 and Terminal ID as auth code
-        $phoneRawBytes = $header['phoneNumberRaw'];
-        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 0, $authCode);
+        // Send registration response (0x8100) with result=1 (Vehicle already registered)
+        // With result != 0, no auth code is sent
+        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
+            $header['phoneNumberRaw'],
+            $header['serialNumber'],
+            1, // Result: 1 = Vehicle already registered
+            '' // No auth code needed
+        );
         $this->sendResponse($connectionId, $response);
 
         $this->log("Registration successful - Auth code: {$authCode}");
