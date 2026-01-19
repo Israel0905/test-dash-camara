@@ -269,8 +269,8 @@ class TcpServer
             'registeredAt' => date('Y-m-d H:i:s'),
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
-        // Use S/N from camera label with standard JT808 (no padding)
-        $authCode = '08820251212168';
+        // Use short phone number as auth code (6 chars)
+        $authCode = $phoneNumber;
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         // Send registration response (0x8100) with result=0 and Terminal ID as auth code
