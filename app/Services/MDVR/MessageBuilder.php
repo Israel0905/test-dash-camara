@@ -4,12 +4,13 @@ namespace App\Services\MDVR;
 
 /**
  * Message Builder for JTT808/JTT1078 Protocol
- * 
+ *
  * Builds response messages to send to MDVR devices
  */
 class MessageBuilder
 {
     private string $serverPhoneNumber;
+
     private int $serialNumber = 0;
 
     public function __construct(string $serverPhoneNumber = '00000000000000000000')
@@ -20,11 +21,11 @@ class MessageBuilder
     /**
      * Build a complete message with delimiters
      */
-    public function buildMessage(int $messageId, array $body, string $phoneNumber, int $replySerialNumber = null): array
+    public function buildMessage(int $messageId, array $body, string $phoneNumber, ?int $replySerialNumber = null): array
     {
         $header = $this->buildHeader($messageId, count($body), $phoneNumber, $replySerialNumber);
         $content = array_merge($header, $body);
-        
+
         // Calculate checksum
         $checksum = ProtocolHelper::calculateChecksum($content);
         $content[] = $checksum;
@@ -41,7 +42,7 @@ class MessageBuilder
     }
 
     /**
-     * Build message header (17 bytes)
+     * Build message header (12 bytes for JTT808-2011/2013 compatibility)
      */
     private function buildHeader(int $messageId, int $bodyLength, string $phoneNumber, ?int $serialNumber): array
     {
@@ -52,16 +53,14 @@ class MessageBuilder
         ];
 
         // Properties (2 bytes)
-        // Bit 0-9: body length, Bit 10-12: encryption (0), Bit 13: multi-packet (0), Bit 14: version flag (1)
-        $properties = ($bodyLength & 0x03FF) | (1 << 14); // Version flag = 1 for JTT808-2019
+        // Bit 0-9: body length, Bit 10-12: encryption (0), Bit 13: multi-packet (0)
+        // NO version flag for 2011/2013 compatibility
+        $properties = $bodyLength & 0x03FF;
         $header[] = ($properties >> 8) & 0xFF;
         $header[] = $properties & 0xFF;
 
-        // Protocol version (1 byte) - 1 for JTT808-2019
-        $header[] = 0x01;
-
-        // Phone number (10 bytes BCD)
-        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber);
+        // Phone number (6 bytes BCD for 2011/2013 format)
+        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 6);
         $header = array_merge($header, $phoneBcd);
 
         // Serial number (2 bytes)
@@ -78,6 +77,7 @@ class MessageBuilder
     private function getNextSerialNumber(): int
     {
         $this->serialNumber = ($this->serialNumber + 1) & 0xFFFF;
+
         return $this->serialNumber;
     }
 
@@ -109,7 +109,7 @@ class MessageBuilder
         ];
 
         // Add auth code if successful
-        if ($result === 0 && !empty($authCode)) {
+        if ($result === 0 && ! empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
             $body = array_merge($body, $authBytes);
         }
@@ -162,7 +162,7 @@ class MessageBuilder
         string $alarmNumber         // 32 bytes unique number
     ): array {
         $ipBytes = array_values(unpack('C*', $attachmentServerIp));
-        
+
         $body = [
             count($ipBytes) & 0xFF, // IP length
         ];
@@ -276,6 +276,7 @@ class MessageBuilder
     {
         // Commands: 0x70: cut oil, 0x71: restore oil, 0x72: cut circuit, 0x73: restore circuit, 0x74: restart
         $body = [$command & 0xFF];
+
         return $this->buildMessage(ProtocolHelper::MSG_TERMINAL_CONTROL, $body, $phoneNumber);
     }
 

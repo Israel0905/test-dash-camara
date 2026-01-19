@@ -180,13 +180,15 @@ class ProtocolHelper
     }
 
     /**
-     * Convert phone number string to BCD[10]
+     * Convert phone number string to BCD bytes
+     * @param int $bytes 6 for JTT808-2011/2013, 10 for JTT808-2019
      */
-    public static function phoneNumberToBcd(string $phone): array
+    public static function phoneNumberToBcd(string $phone, int $bytes = 10): array
     {
-        // Pad to 20 digits (10 BCD bytes)
-        $phone = str_pad($phone, 20, '0', STR_PAD_LEFT);
-        return self::stringToBcd($phone, 10);
+        // Pad to required digits (bytes * 2)
+        $digits = $bytes * 2;
+        $phone = str_pad($phone, $digits, '0', STR_PAD_LEFT);
+        return self::stringToBcd($phone, $bytes);
     }
 
     /**
