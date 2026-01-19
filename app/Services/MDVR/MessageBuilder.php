@@ -151,10 +151,11 @@ class MessageBuilder
             $result & 0xFF,               // Byte 2
         ];
 
-        // Byte 3 = Length, Byte 4+ = Auth code
+        // Byte 3 = Padding (0x00), Byte 4+ = Auth code
         if ($result === 0) {
+            $body[] = 0x00; // Byte 3: Padding
+            
             $authBytes = !empty($authCode) ? array_values(unpack('C*', $authCode)) : [];
-            $body[] = count($authBytes) & 0xFF;  // Byte 3: Length (0 if empty)
             if (!empty($authBytes)) {
                 $body = array_merge($body, $authBytes);  // Byte 4+: Auth code
             }
