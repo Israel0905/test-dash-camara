@@ -343,7 +343,8 @@ class ProtocolHelper
         $messageId = ($headerBytes[0] << 8) | $headerBytes[1];
         $properties = ($headerBytes[2] << 8) | $headerBytes[3];
         $protocolVersion = $headerBytes[4];
-        $phoneNumber = self::bcdToPhoneNumber(array_slice($headerBytes, 5, 10));
+        $phoneRawBytes = array_slice($headerBytes, 5, 10);
+        $phoneNumber = self::bcdToPhoneNumber($phoneRawBytes);
         $serialNumber = ($headerBytes[15] << 8) | $headerBytes[16];
 
         // Parse properties
@@ -362,6 +363,7 @@ class ProtocolHelper
             'versionFlag' => $versionFlag,
             'protocolVersion' => $protocolVersion,
             'phoneNumber' => $phoneNumber,
+            'phoneNumberRaw' => $phoneRawBytes,  // Preserve raw bytes for responses
             'serialNumber' => $serialNumber,
         ];
     }

@@ -23,7 +23,16 @@ class MessageBuilder
      */
     public function buildMessage(int $messageId, array $body, string $phoneNumber, ?int $replySerialNumber = null): array
     {
-        $header = $this->buildHeader($messageId, count($body), $phoneNumber, $replySerialNumber);
+        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 10);
+        return $this->buildMessageWithRawPhone($messageId, $body, $phoneBcd, $replySerialNumber);
+    }
+
+    /**
+     * Build a complete message using raw phone bytes (preserves exact device identity)
+     */
+    public function buildMessageWithRawPhone(int $messageId, array $body, array $phoneRawBytes, ?int $replySerialNumber = null): array
+    {
+        $header = $this->buildHeaderWithRawPhone($messageId, count($body), $phoneRawBytes, $replySerialNumber);
         $content = array_merge($header, $body);
 
         // Calculate checksum
@@ -46,6 +55,15 @@ class MessageBuilder
      */
     private function buildHeader(int $messageId, int $bodyLength, string $phoneNumber, ?int $serialNumber): array
     {
+        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 10);
+        return $this->buildHeaderWithRawPhone($messageId, $bodyLength, $phoneBcd, $serialNumber);
+    }
+
+    /**
+     * Build message header using raw phone bytes (17 bytes for JTT808-2019)
+     */
+    private function buildHeaderWithRawPhone(int $messageId, int $bodyLength, array $phoneRawBytes, ?int $serialNumber): array
+    {
         // Message ID (2 bytes)
         $header = [
             ($messageId >> 8) & 0xFF,
@@ -61,9 +79,8 @@ class MessageBuilder
         // Protocol version (1 byte) - 1 for JTT808-2019
         $header[] = 0x01;
 
-        // Phone number (10 bytes BCD)
-        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 10);
-        $header = array_merge($header, $phoneBcd);
+        // Phone number (10 bytes) - use raw bytes directly
+        $header = array_merge($header, $phoneRawBytes);
 
         // Serial number (2 bytes)
         $serial = $serialNumber ?? $this->getNextSerialNumber();
@@ -108,6 +125,16 @@ class MessageBuilder
      */
     public function buildRegistrationResponse(string $phoneNumber, int $replySerial, int $result, string $authCode = ''): array
     {
+        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 10);
+        return $this->buildRegistrationResponseWithRawPhone($phoneBcd, $replySerial, $result, $authCode);
+    }
+
+    /**
+     * Build Registration Response (0x8100) using raw phone bytes
+     * CRITICAL: Use raw phone bytes from device to ensure it recognizes the response
+     */
+    public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
+    {
         $body = [
             ($replySerial >> 8) & 0xFF,
             $replySerial & 0xFF,
@@ -120,7 +147,7 @@ class MessageBuilder
             $body = array_merge($body, $authBytes);
         }
 
-        return $this->buildMessage(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneNumber);
+        return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
     }
 
     /**

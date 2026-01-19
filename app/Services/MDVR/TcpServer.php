@@ -271,11 +271,13 @@ class TcpServer
             'plateColor' => $plateColor,
             'registeredAt' => date('Y-m-d H:i:s'),
             'authCode' => $authCode,
+            'phoneNumberRaw' => $header['phoneNumberRaw'],  // Store raw bytes
         ];
 
-        // Send registration response (0x8100) - always result=0 with auth code
-        // Per Ultravision doc: result=0 means success, device should then authenticate with 0x0102
-        $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 0, $authCode);
+        // Send registration response (0x8100) using RAW phone bytes
+        // CRITICAL: Must use exact same phone bytes that device sent
+        $phoneRawBytes = $header['phoneNumberRaw'];
+        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 0, $authCode);
         $this->sendResponse($connectionId, $response);
 
         $this->log("Registration successful - Auth code: {$authCode}");
