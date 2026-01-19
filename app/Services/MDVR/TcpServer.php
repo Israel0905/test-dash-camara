@@ -269,8 +269,8 @@ class TcpServer
             'registeredAt' => date('Y-m-d H:i:s'),
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
-        // Use Terminal ID as auth code per ULV standard
-        $authCode = $terminalId;
+        // Try device password 888888
+        $authCode = '888888';
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         // Send registration response (0x8100) with result=0 and Terminal ID as auth code
