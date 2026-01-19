@@ -272,15 +272,15 @@ class TcpServer
         // Use Phone Number (992002) with Padding 00 format
         $authCode = $phoneNumber;
 
-        // Send registration response (0x8100) with result=1 (Vehicle already registered)
-        // This forces device to use its internal password
-        $this->devices[$phoneNumber]['authCode'] = '';
+        // Send registration response (0x8100) with result=0 and Full Terminal ID as auth code
+        $authCode = $terminalId;
+        $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
             $header['phoneNumberRaw'],
             $header['serialNumber'],
-            1, // Result: 1 = Vehicle already registered
-            '' // No auth code
+            0, // Result: 0 = Success
+            $authCode
         );
         $this->sendResponse($connectionId, $response);
 
