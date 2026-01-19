@@ -270,13 +270,9 @@ class TcpServer
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
 
-        // Send registration response (0x8100) with result=3 (terminal already registered)
-        // This should trigger the device to send authentication (0x0102) with its stored auth code
-        $phoneRawBytes = $header['phoneNumberRaw'];
-        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 3, '');
-        $this->sendResponse($connectionId, $response);
-
-        $this->log('Registration response sent - Result: 3 (Terminal already registered)');
+        // TEST: Don't respond to registration - see if device sends auth (0x0102) automatically
+        // Some devices don't wait for registration response
+        $this->log('Registration received - NOT responding (testing if device sends 0x0102 automatically)');
     }
 
     /**
