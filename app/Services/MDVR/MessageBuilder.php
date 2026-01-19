@@ -104,18 +104,23 @@ class MessageBuilder
      * Per Ultravision documentation Table 3.3.2:
      * - Byte 0-1: Reply serial number (WORD)
      * - Byte 2: Result (BYTE)
-     * - Byte 3+: Authentication code (STRING) - only on success
+     * - Byte 3: Reserved/padding (documentation shows auth code at byte 4)
+     * - Byte 4+: Authentication code (STRING)
      */
     public function buildRegistrationResponse(string $phoneNumber, int $replySerial, int $result, string $authCode = ''): array
     {
         $body = [
-            ($replySerial >> 8) & 0xFF,
-            $replySerial & 0xFF,
-            $result & 0xFF,
+            ($replySerial >> 8) & 0xFF,  // Byte 0
+            $replySerial & 0xFF,          // Byte 1
+            $result & 0xFF,               // Byte 2
         ];
 
-        // Add auth code if successful
+        // Add auth code if successful (per Ultravision doc, auth code starts at byte 4)
         if ($result === 0 && !empty($authCode)) {
+            // Add reserved byte at position 3
+            $body[] = 0x00;
+            
+            // Add auth code bytes starting at position 4
             $authBytes = array_values(unpack('C*', $authCode));
             $body = array_merge($body, $authBytes);
         }

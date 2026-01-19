@@ -2,26 +2,28 @@
 
 namespace App\Services\MDVR;
 
-use React\EventLoop\Loop;
-use React\Socket\SocketServer;
-use React\Socket\ConnectionInterface;
 use Illuminate\Support\Facades\Log;
+use React\Socket\ConnectionInterface;
+use React\Socket\SocketServer;
 
 /**
  * TCP Server for MDVR/JTT808 Protocol
- * 
+ *
  * Handles connections from MDVR devices and processes messages
  */
 class TcpServer
 {
     private SocketServer $server;
+
     private MessageBuilder $messageBuilder;
+
     private array $connections = [];
+
     private array $devices = [];
 
     public function __construct()
     {
-        $this->messageBuilder = new MessageBuilder();
+        $this->messageBuilder = new MessageBuilder;
     }
 
     /**
@@ -41,11 +43,11 @@ class TcpServer
         });
 
         $this->server->on('error', function (\Exception $e) {
-            $this->log("Server error: " . $e->getMessage(), 'error');
+            $this->log('Server error: '.$e->getMessage(), 'error');
         });
 
-        $this->log("MDVR Server started successfully!");
-        $this->log("Waiting for device connections...");
+        $this->log('MDVR Server started successfully!');
+        $this->log('Waiting for device connections...');
     }
 
     /**
@@ -80,7 +82,7 @@ class TcpServer
 
         // Handle errors
         $connection->on('error', function (\Exception $e) use ($remoteAddress) {
-            $this->log("Connection error from {$remoteAddress}: " . $e->getMessage(), 'error');
+            $this->log("Connection error from {$remoteAddress}: ".$e->getMessage(), 'error');
         });
     }
 
@@ -89,7 +91,7 @@ class TcpServer
      */
     private function handleData(string $connectionId, string $data): void
     {
-        if (!isset($this->connections[$connectionId])) {
+        if (! isset($this->connections[$connectionId])) {
             return;
         }
 
@@ -133,8 +135,8 @@ class TcpServer
     }
 
     /**
-    * Process a complete message
-    */
+     * Process a complete message
+     */
     private function processMessage(string $connectionId, array $rawBytes): void
     {
         $hexMessage = ProtocolHelper::bytesToHexString($rawBytes);
@@ -142,15 +144,16 @@ class TcpServer
 
         // Parse message
         $message = ProtocolHelper::parseMessage($rawBytes);
-        if (!$message || !$message['valid']) {
-            $this->log("Invalid message received", 'warning');
+        if (! $message || ! $message['valid']) {
+            $this->log('Invalid message received', 'warning');
+
             return;
         }
 
         $header = $message['header'];
         $body = $message['body'];
 
-        /* 
+        /*
         |--------------------------------------------------------------------------
         | AGREGADO: Envío de datos a la vista Web (WebSockets)
         |--------------------------------------------------------------------------
@@ -159,19 +162,19 @@ class TcpServer
         */
         event(new \App\Events\MdvrMessageReceived([
             'phoneNumber' => $header['phoneNumber'],
-            'messageId'   => $header['messageIdHex'],
-            'body'        => $body, // Aquí van los datos traducidos o crudos
-            'time'        => now()->format('H:i:s'),
-            'hex'         => $hexMessage // Útil para ver la trama original en la web
+            'messageId' => $header['messageIdHex'],
+            'body' => $body, // Aquí van los datos traducidos o crudos
+            'time' => now()->format('H:i:s'),
+            'hex' => $hexMessage, // Útil para ver la trama original en la web
         ]));
-        /* 
+        /*
         |--------------------------------------------------------------------------
         */
 
         $this->log("Message ID: {$header['messageIdHex']}, Phone: {$header['phoneNumber']}, Serial: {$header['serialNumber']}");
 
         // Update connection info
-        if (!empty($header['phoneNumber'])) {
+        if (! empty($header['phoneNumber'])) {
             $this->connections[$connectionId]['phoneNumber'] = $header['phoneNumber'];
         }
 
@@ -256,9 +259,8 @@ class TcpServer
 
         $this->log("Registration - Manufacturer: {$manufacturerId}, Model: {$terminalModel}, ID: {$terminalId}, Plate: {$plateNumber}");
 
-
         // Generate fixed auth code based on device phone number (deterministic)
-        $authCode = substr(md5('mdvr_auth_' . $phoneNumber), 0, 16);
+        $authCode = substr(md5('mdvr_auth_'.$phoneNumber), 0, 16);
 
         // Store device info
         $this->devices[$phoneNumber] = [
@@ -289,6 +291,7 @@ class TcpServer
 
         if (count($body) < 1) {
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 2);
+
             return;
         }
 
@@ -305,7 +308,7 @@ class TcpServer
             $imei = trim(implode('', array_map('chr', array_slice($body, $authCodeLength + 1, 15))), "\x00");
             $firmware = trim(implode('', array_map('chr', array_slice($body, $authCodeLength + 16, 20))), "\x00");
             $this->log("IMEI: {$imei}, Firmware: {$firmware}");
-            
+
             if (isset($this->devices[$phoneNumber])) {
                 $this->devices[$phoneNumber]['imei'] = $imei;
                 $this->devices[$phoneNumber]['firmware'] = $firmware;
@@ -343,7 +346,7 @@ class TcpServer
         // Parse basic location info
         $location = ProtocolHelper::parseLocationBasicInfo($body);
 
-        $this->log("Location - Lat: {$location['latitude']}, Lng: {$location['longitude']}, Speed: {$location['speed']} km/h, ACC: " . ($location['accOn'] ? 'ON' : 'OFF'));
+        $this->log("Location - Lat: {$location['latitude']}, Lng: {$location['longitude']}, Speed: {$location['speed']} km/h, ACC: ".($location['accOn'] ? 'ON' : 'OFF'));
 
         // Parse additional info
         $additionalInfo = ProtocolHelper::parseLocationAdditionalInfo($body);
@@ -353,20 +356,20 @@ class TcpServer
         foreach ([ProtocolHelper::ADDINFO_ADAS_ALARM, ProtocolHelper::ADDINFO_DSM_ALARM, ProtocolHelper::ADDINFO_BSD_ALARM, ProtocolHelper::ADDINFO_AGGRESSIVE_DRIVING] as $alarmId) {
             if (isset($additionalInfo[$alarmId])) {
                 $aiAlarms[] = $additionalInfo[$alarmId];
-                $this->log("AI Alarm detected: " . json_encode($additionalInfo[$alarmId]));
+                $this->log('AI Alarm detected: '.json_encode($additionalInfo[$alarmId]));
             }
         }
 
         // If AI alarms present, could trigger attachment upload request
-        if (!empty($aiAlarms)) {
+        if (! empty($aiAlarms)) {
             $this->handleAiAlarmDetected($connectionId, $phoneNumber, $aiAlarms);
         }
 
         // Log additional info
-        if (!empty($additionalInfo)) {
+        if (! empty($additionalInfo)) {
             foreach ($additionalInfo as $id => $info) {
-                if (!in_array($id, [ProtocolHelper::ADDINFO_ADAS_ALARM, ProtocolHelper::ADDINFO_DSM_ALARM, ProtocolHelper::ADDINFO_BSD_ALARM, ProtocolHelper::ADDINFO_AGGRESSIVE_DRIVING])) {
-                    $this->log("Additional Info [{$id}]: " . json_encode($info));
+                if (! in_array($id, [ProtocolHelper::ADDINFO_ADAS_ALARM, ProtocolHelper::ADDINFO_DSM_ALARM, ProtocolHelper::ADDINFO_BSD_ALARM, ProtocolHelper::ADDINFO_AGGRESSIVE_DRIVING])) {
+                    $this->log("Additional Info [{$id}]: ".json_encode($info));
                 }
             }
         }
@@ -388,7 +391,7 @@ class TcpServer
         // Could send 0x9208 to request alarm attachments
         // For now, just log the alarms
         foreach ($alarms as $alarm) {
-            $this->log("AI Alarm: " . json_encode($alarm));
+            $this->log('AI Alarm: '.json_encode($alarm));
             // TODO: Store alarm in database and optionally request attachment
         }
     }
@@ -403,6 +406,7 @@ class TcpServer
 
         if (count($body) < 3) {
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_LOCATION_BATCH, 2);
+
             return;
         }
 
@@ -414,18 +418,22 @@ class TcpServer
         // Parse each location in the batch
         $offset = 3;
         for ($i = 0; $i < $dataCount && $offset < count($body); $i++) {
-            if ($offset + 2 > count($body)) break;
+            if ($offset + 2 > count($body)) {
+                break;
+            }
 
             $bodyLength = ($body[$offset] << 8) | $body[$offset + 1];
             $offset += 2;
 
-            if ($offset + $bodyLength > count($body)) break;
+            if ($offset + $bodyLength > count($body)) {
+                break;
+            }
 
             $locationBody = array_slice($body, $offset, $bodyLength);
             $location = ProtocolHelper::parseLocationBasicInfo($locationBody);
-            
+
             $this->log("Batch Location {$i}: Lat: {$location['latitude']}, Lng: {$location['longitude']}");
-            
+
             $offset += $bodyLength;
         }
 
@@ -437,14 +445,16 @@ class TcpServer
      */
     private function handleDeviceResponse(string $connectionId, array $header, array $body): void
     {
-        if (count($body) < 5) return;
+        if (count($body) < 5) {
+            return;
+        }
 
         $replySerial = ($body[0] << 8) | $body[1];
         $replyId = ($body[2] << 8) | $body[3];
         $result = $body[4];
 
         $resultText = ['success', 'failure', 'message error', 'not supported'][$result] ?? 'unknown';
-        $this->log("Device response for 0x" . sprintf('%04X', $replyId) . " serial {$replySerial}: {$resultText}");
+        $this->log('Device response for 0x'.sprintf('%04X', $replyId)." serial {$replySerial}: {$resultText}");
     }
 
     /**
@@ -457,19 +467,20 @@ class TcpServer
 
         if (empty($body)) {
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_TRANSPARENT_DATA, 2);
+
             return;
         }
 
         $messageType = $body[0];
         $data = array_slice($body, 1);
 
-        $this->log("Transparent data - Type: 0x" . sprintf('%02X', $messageType) . ", Length: " . count($data));
+        $this->log('Transparent data - Type: 0x'.sprintf('%02X', $messageType).', Length: '.count($data));
 
         // Handle different transparent message types
         switch ($messageType) {
             case 0xF1: // GPS data (Table 3.10.3)
             case 0xF3: // GPS data standard (Table 3.10.6)
-                $this->log("GPS transparent data received");
+                $this->log('GPS transparent data received');
                 break;
 
             case 0x41: // OBD data
@@ -478,11 +489,11 @@ class TcpServer
                 break;
 
             case 0xA1: // WiFi info
-                $this->log("WiFi info received");
+                $this->log('WiFi info received');
                 break;
 
             default:
-                $this->log("Unknown transparent data type: 0x" . sprintf('%02X', $messageType));
+                $this->log('Unknown transparent data type: 0x'.sprintf('%02X', $messageType));
         }
 
         $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_TRANSPARENT_DATA, 0);
@@ -494,7 +505,8 @@ class TcpServer
     private function handleResourceListResponse(string $connectionId, array $header, array $body): void
     {
         if (count($body) < 6) {
-            $this->log("Invalid resource list response", 'warning');
+            $this->log('Invalid resource list response', 'warning');
+
             return;
         }
 
@@ -559,7 +571,7 @@ class TcpServer
      */
     private function sendResponse(string $connectionId, array $response): void
     {
-        if (!isset($this->connections[$connectionId])) {
+        if (! isset($this->connections[$connectionId])) {
             return;
         }
 
@@ -576,13 +588,15 @@ class TcpServer
     public function queryResources(string $phoneNumber, int $channel, string $startTime, string $endTime): bool
     {
         $connectionId = $this->findConnectionByPhone($phoneNumber);
-        if (!$connectionId) {
+        if (! $connectionId) {
             $this->log("Device {$phoneNumber} not connected", 'warning');
+
             return false;
         }
 
         $message = $this->messageBuilder->buildQueryResourcesRequest($phoneNumber, $channel, $startTime, $endTime);
         $this->sendResponse($connectionId, $message);
+
         return true;
     }
 
@@ -592,12 +606,13 @@ class TcpServer
     public function requestLiveVideo(string $phoneNumber, int $channel, string $serverIp, int $tcpPort): bool
     {
         $connectionId = $this->findConnectionByPhone($phoneNumber);
-        if (!$connectionId) {
+        if (! $connectionId) {
             return false;
         }
 
         $message = $this->messageBuilder->buildVideoRequest($phoneNumber, $serverIp, $tcpPort, 0, $channel);
         $this->sendResponse($connectionId, $message);
+
         return true;
     }
 
@@ -611,6 +626,7 @@ class TcpServer
                 return $id;
             }
         }
+
         return null;
     }
 
@@ -630,6 +646,7 @@ class TcpServer
                 ];
             }
         }
+
         return $devices;
     }
 
@@ -641,7 +658,7 @@ class TcpServer
         $timestamp = date('Y-m-d H:i:s');
         $formattedMessage = "[{$timestamp}] [MDVR] {$message}";
 
-        echo $formattedMessage . PHP_EOL;
+        echo $formattedMessage.PHP_EOL;
 
         if (config('mdvr.logging.enabled', true)) {
             Log::{$level}("[MDVR] {$message}");
