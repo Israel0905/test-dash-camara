@@ -272,8 +272,8 @@ class TcpServer
         // Use Phone Number (992002) with Padding 00 format
         $authCode = $phoneNumber;
 
-        // Send registration response (0x8100) with result=0 and admin as auth code
-        $authCode = 'admin';
+        // Send registration response (0x8100) with result=0 and 888888 as auth code
+        $authCode = '888888';
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
