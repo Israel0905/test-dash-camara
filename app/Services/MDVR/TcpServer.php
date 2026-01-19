@@ -273,8 +273,8 @@ class TcpServer
         $authCode = $phoneNumber;
         $this->devices[$phoneNumber]['authCode'] = '';
 
-        // Send registration response (0x8100) with result=0 and 123456 as auth code
-        $authCode = '123456';
+        // Send registration response (0x8100) with result=0 and PW Label as auth code
+        $authCode = '1122334455';
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
