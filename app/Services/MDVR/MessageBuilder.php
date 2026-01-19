@@ -131,11 +131,10 @@ class MessageBuilder
 
     /**
      * Build Registration Response (0x8100) using raw phone bytes
-     * Per Ultravision Table 3.3.2:
+     * Standard JT808-2019 format:
      * - Byte 0-1: Reply serial number (WORD)
      * - Byte 2: Result (BYTE)
-     * - Byte 3: Reserved (0x00)
-     * - Byte 4+: Authentication code (STRING)
+     * - Byte 3+: Authentication code (STRING) - NO padding
      */
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
@@ -143,10 +142,9 @@ class MessageBuilder
             ($replySerial >> 8) & 0xFF,  // Byte 0
             $replySerial & 0xFF,          // Byte 1
             $result & 0xFF,               // Byte 2
-            0x00,                         // Byte 3 - Reserved per Ultravision doc
         ];
 
-        // Auth code starts at byte 4
+        // Auth code starts immediately at byte 3 - NO padding
         if ($result === 0 && !empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
             $body = array_merge($body, $authBytes);
