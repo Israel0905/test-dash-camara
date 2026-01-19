@@ -269,7 +269,7 @@ class TcpServer
             'registeredAt' => date('Y-m-d H:i:s'),
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
-        // Use Terminal ID as auth code - standard JT808
+        // Use Terminal ID with length prefix format
         $authCode = $terminalId;
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
