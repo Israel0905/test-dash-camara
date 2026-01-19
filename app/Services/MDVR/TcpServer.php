@@ -269,7 +269,7 @@ class TcpServer
             'registeredAt' => date('Y-m-d H:i:s'),
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
-        // Use S/N from camera label with ULV padding
+        // Use S/N from camera label with standard JT808 (no padding)
         $authCode = '08820251212168';
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
