@@ -256,6 +256,15 @@ class TcpServer
 
         $this->log("Registration - Manufacturer: {$manufacturerId}, Model: {$terminalModel}, ID: {$terminalId}, Plate: {$plateNumber}");
 
+        // Check if device already registered - use existing auth code
+        if (isset($this->devices[$phoneNumber]['authCode'])) {
+            $authCode = $this->devices[$phoneNumber]['authCode'];
+            $this->log("Device already registered - using existing auth code: {$authCode}");
+        } else {
+            // Generate a fixed auth code based on device phone number (deterministic)
+            $authCode = substr(md5('mdvr_auth_' . $phoneNumber), 0, 16);
+        }
+
         // Store device info
         $this->devices[$phoneNumber] = [
             'manufacturerId' => $manufacturerId,
@@ -264,13 +273,10 @@ class TcpServer
             'plateNumber' => $plateNumber,
             'plateColor' => $plateColor,
             'registeredAt' => date('Y-m-d H:i:s'),
+            'authCode' => $authCode,
         ];
 
-        // Generate auth code
-        $authCode = bin2hex(random_bytes(8));
-        $this->devices[$phoneNumber]['authCode'] = $authCode;
-
-        // Send registration response (0x8100)
+        // Send registration response (0x8100) - result 0 = success
         $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 0, $authCode);
         $this->sendResponse($connectionId, $response);
 
