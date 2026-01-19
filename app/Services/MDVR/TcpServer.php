@@ -269,8 +269,8 @@ class TcpServer
             'registeredAt' => date('Y-m-d H:i:s'),
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
-        // Use Terminal ID as auth code (12 chars) - device may expect this
-        $authCode = $terminalId;
+        // Use PW from camera label as auth code
+        $authCode = '0882025121216168';
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         // Send registration response (0x8100) with result=0 and Terminal ID as auth code
