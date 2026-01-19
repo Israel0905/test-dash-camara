@@ -101,20 +101,20 @@ class MessageBuilder
 
     /**
      * Build Registration Response (0x8100)
-     * CORRECTED FORMAT:
-     * - Byte 0-1: Reply serial number (WORD) - MUST match device's message serial
+     * Format:
+     * - Byte 0-1: Reply serial number (WORD)
      * - Byte 2: Result (BYTE) - 0x00 for success
-     * - Byte 3+: Authentication code (STRING) - REQUIRED for success
+     * - Byte 3+: Authentication code (STRING)
      */
     public function buildRegistrationResponse(string $phoneNumber, int $replySerial, int $result, string $authCode = ''): array
     {
         $body = [
-            ($replySerial >> 8) & 0xFF,  // Byte 0
-            $replySerial & 0xFF,          // Byte 1
-            $result & 0xFF,               // Byte 2 - MUST be 0x00 for success
+            ($replySerial >> 8) & 0xFF,
+            $replySerial & 0xFF,
+            $result & 0xFF,
         ];
 
-        // Auth code starts at byte 3 - REQUIRED for device to proceed to 0x0102
+        // Auth code directly after result (no length prefix)
         if ($result === 0 && !empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
             $body = array_merge($body, $authBytes);

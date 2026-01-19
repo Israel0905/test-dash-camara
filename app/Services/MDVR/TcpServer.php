@@ -259,8 +259,8 @@ class TcpServer
 
         $this->log("Registration - Manufacturer: {$manufacturerId}, Model: {$terminalModel}, ID: {$terminalId}, Plate: {$plateNumber}");
 
-        // Generate fixed auth code based on device phone number (deterministic)
-        $authCode = substr(md5('mdvr_auth_'.$phoneNumber), 0, 16);
+        // Use simple numeric auth code - standard for Chinese MDVR devices
+        $authCode = '123456';
 
         // Store device info
         $this->devices[$phoneNumber] = [
