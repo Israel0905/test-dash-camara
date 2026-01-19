@@ -4,75 +4,124 @@ namespace App\Services\MDVR;
 
 /**
  * Protocol Helper for JTT808/JTT1078 MDVR Protocol
- * 
+ *
  * Handles message parsing, escaping, checksum calculation, and data conversions
  */
 class ProtocolHelper
 {
     const START_DELIMITER = 0x7E;
+
     const ESCAPE_CHAR = 0x7D;
 
     /**
      * Message IDs - Device to Server
      */
     const MSG_DEVICE_GENERAL_RESPONSE = 0x0001;
+
     const MSG_HEARTBEAT = 0x0002;
+
     const MSG_REGISTRATION = 0x0100;
+
     const MSG_AUTHENTICATION = 0x0102;
+
     const MSG_LOCATION_REPORT = 0x0200;
+
     const MSG_LOCATION_BATCH = 0x0704;
+
     const MSG_MULTIMEDIA_EVENT = 0x0800;
+
     const MSG_MULTIMEDIA_DATA = 0x0801;
+
     const MSG_DRIVER_INFO = 0x0702;
+
     const MSG_TRANSPARENT_DATA = 0x0900;
+
     const MSG_RESOURCE_LIST_RESPONSE = 0x1205;
+
     const MSG_ALARM_ATTACHMENT_INFO = 0x1210;
+
     const MSG_FILE_INFO = 0x1211;
+
     const MSG_FILE_COMPLETE = 0x1212;
+
     const MSG_PASSENGER_DATA = 0x1005;
+
     const MSG_VEHICLE_INFO_RESPONSE = 0x4040;
 
     /**
      * Message IDs - Server to Device
      */
     const MSG_SERVER_GENERAL_RESPONSE = 0x8001;
+
     const MSG_REGISTRATION_RESPONSE = 0x8100;
+
     const MSG_TRANSPARENT_DATA_DOWN = 0x8900;
+
     const MSG_VIDEO_REQUEST = 0x9101;
+
     const MSG_VIDEO_CONTROL = 0x9102;
+
     const MSG_PLAYBACK_REQUEST = 0x9201;
+
     const MSG_PLAYBACK_CONTROL = 0x9202;
+
     const MSG_QUERY_RESOURCES = 0x9205;
+
     const MSG_FILE_UPLOAD_INSTRUCTION = 0x9206;
+
     const MSG_FILE_UPLOAD_CONTROL = 0x9207;
+
     const MSG_ALARM_ATTACHMENT_REQUEST = 0x9208;
+
     const MSG_FILE_COMPLETE_RESPONSE = 0x9212;
+
     const MSG_TERMINAL_CONTROL = 0x8105;
+
     const MSG_TEXT_MESSAGE = 0x8300;
+
     const MSG_QUERY_VEHICLE_INFO = 0xB040;
+
     const MSG_PARAM_CONFIG = 0xB050;
 
     /**
      * Additional Info IDs for Location Report
      */
     const ADDINFO_MILEAGE = 0x01;
+
     const ADDINFO_FUEL = 0x02;
+
     const ADDINFO_SPEED_RECORDER = 0x03;
+
     const ADDINFO_VIDEO_ALARM = 0x14;
+
     const ADDINFO_VIDEO_LOSS = 0x15;
+
     const ADDINFO_MEMORY_FAULT = 0x17;
+
     const ADDINFO_ABNORMAL_DRIVING = 0x18;
+
     const ADDINFO_EXTENDED_VEHICLE = 0x25;
+
     const ADDINFO_IO_STATUS = 0x2A;
+
     const ADDINFO_SIGNAL_STRENGTH = 0x30;
+
     const ADDINFO_GNSS_SATELLITES = 0x31;
+
     const ADDINFO_ADAS_ALARM = 0x64;
+
     const ADDINFO_DSM_ALARM = 0x65;
+
     const ADDINFO_BSD_ALARM = 0x67;
+
     const ADDINFO_AGGRESSIVE_DRIVING = 0x70;
+
     const ADDINFO_MDVR_STATUS = 0xEF;
+
     const ADDINFO_GSENSOR_ALARM = 0xE1;
+
     const ADDINFO_TEMPERATURE = 0xE4;
+
     const ADDINFO_AUX_FUEL = 0xEC;
 
     /**
@@ -94,6 +143,7 @@ class ProtocolHelper
                 $result[] = $byte;
             }
         }
+
         return $result;
     }
 
@@ -123,6 +173,7 @@ class ProtocolHelper
                 $i++;
             }
         }
+
         return $result;
     }
 
@@ -135,6 +186,7 @@ class ProtocolHelper
         foreach ($data as $byte) {
             $checksum ^= $byte;
         }
+
         return $checksum & 0xFF;
     }
 
@@ -148,6 +200,7 @@ class ProtocolHelper
         }
         $receivedChecksum = array_pop($data);
         $calculatedChecksum = self::calculateChecksum($data);
+
         return $receivedChecksum === $calculatedChecksum;
     }
 
@@ -161,6 +214,7 @@ class ProtocolHelper
         foreach ($bcd as $byte) {
             $result .= sprintf('%02X', $byte);
         }
+
         return $result;
     }
 
@@ -176,18 +230,21 @@ class ProtocolHelper
         for ($i = 0; $i < strlen($str); $i += 2) {
             $result[] = hexdec(substr($str, $i, 2));
         }
+
         return array_slice($result, 0, $length);
     }
 
     /**
      * Convert phone number string to BCD bytes
-     * @param int $bytes 6 for JTT808-2011/2013, 10 for JTT808-2019
+     *
+     * @param  int  $bytes  6 for JTT808-2011/2013, 10 for JTT808-2019
      */
     public static function phoneNumberToBcd(string $phone, int $bytes = 10): array
     {
         // Pad to required digits (bytes * 2)
         $digits = $bytes * 2;
         $phone = str_pad($phone, $digits, '0', STR_PAD_LEFT);
+
         return self::stringToBcd($phone, $bytes);
     }
 
@@ -210,6 +267,7 @@ class ProtocolHelper
         for ($i = 0; $i < strlen($hex); $i += 2) {
             $bytes[] = hexdec(substr($hex, $i, 2));
         }
+
         return $bytes;
     }
 
@@ -219,7 +277,8 @@ class ProtocolHelper
     public static function bytesToHexString(array $bytes, bool $withSpaces = true): string
     {
         $separator = $withSpaces ? ' ' : '';
-        return implode($separator, array_map(fn($b) => sprintf('%02X', $b), $bytes));
+
+        return implode($separator, array_map(fn ($b) => sprintf('%02X', $b), $bytes));
     }
 
     /**
@@ -244,7 +303,7 @@ class ProtocolHelper
         $data = self::unescape($data);
 
         // Verify checksum
-        if (!self::verifyChecksum($data)) {
+        if (! self::verifyChecksum($data)) {
             return null;
         }
 
@@ -334,20 +393,40 @@ class ProtocolHelper
 
         // Parse alarm flags
         $alarms = [];
-        if ($alarmFlags & 0x01) $alarms[] = 'SOS';
-        if ($alarmFlags & 0x02) $alarms[] = 'OVERSPEED';
-        if ($alarmFlags & 0x04) $alarms[] = 'FATIGUE';
-        if ($alarmFlags & 0x10) $alarms[] = 'GNSS_FAULT';
-        if ($alarmFlags & 0x20) $alarms[] = 'GNSS_DISCONNECTED';
-        if ($alarmFlags & 0x40) $alarms[] = 'GNSS_SHORT';
-        if ($alarmFlags & 0x100) $alarms[] = 'POWER_OFF';
-        if ($alarmFlags & 0x20000000) $alarms[] = 'COLLISION';
+        if ($alarmFlags & 0x01) {
+            $alarms[] = 'SOS';
+        }
+        if ($alarmFlags & 0x02) {
+            $alarms[] = 'OVERSPEED';
+        }
+        if ($alarmFlags & 0x04) {
+            $alarms[] = 'FATIGUE';
+        }
+        if ($alarmFlags & 0x10) {
+            $alarms[] = 'GNSS_FAULT';
+        }
+        if ($alarmFlags & 0x20) {
+            $alarms[] = 'GNSS_DISCONNECTED';
+        }
+        if ($alarmFlags & 0x40) {
+            $alarms[] = 'GNSS_SHORT';
+        }
+        if ($alarmFlags & 0x100) {
+            $alarms[] = 'POWER_OFF';
+        }
+        if ($alarmFlags & 0x20000000) {
+            $alarms[] = 'COLLISION';
+        }
 
         // Calculate actual lat/lng
         $latValue = $latitude / 1000000.0;
         $lngValue = $longitude / 1000000.0;
-        if ($southLatitude) $latValue = -$latValue;
-        if ($westLongitude) $lngValue = -$lngValue;
+        if ($southLatitude) {
+            $latValue = -$latValue;
+        }
+        if ($westLongitude) {
+            $lngValue = -$lngValue;
+        }
 
         return [
             'alarmFlags' => $alarmFlags,
@@ -374,13 +453,17 @@ class ProtocolHelper
         $offset = 28; // After basic info
 
         while ($offset < count($data)) {
-            if ($offset + 2 > count($data)) break;
+            if ($offset + 2 > count($data)) {
+                break;
+            }
 
             $infoId = $data[$offset];
             $infoLength = $data[$offset + 1];
             $offset += 2;
 
-            if ($offset + $infoLength > count($data)) break;
+            if ($offset + $infoLength > count($data)) {
+                break;
+            }
 
             $infoData = array_slice($data, $offset, $infoLength);
             $offset += $infoLength;
@@ -399,10 +482,12 @@ class ProtocolHelper
         switch ($id) {
             case self::ADDINFO_MILEAGE:
                 $value = ($data[0] << 24) | ($data[1] << 16) | ($data[2] << 8) | $data[3];
+
                 return ['type' => 'mileage', 'value' => $value / 10.0, 'unit' => 'km'];
 
             case self::ADDINFO_FUEL:
                 $value = ($data[0] << 8) | $data[1];
+
                 return ['type' => 'fuel', 'value' => $value / 10.0, 'unit' => 'L'];
 
             case self::ADDINFO_SIGNAL_STRENGTH:
@@ -426,6 +511,7 @@ class ProtocolHelper
             case self::ADDINFO_GSENSOR_ALARM:
                 $alarmTypes = ['RAPID_ACCEL', 'SUDDEN_DECEL', 'SHARP_TURN'];
                 $type = isset($alarmTypes[$data[0] - 1]) ? $alarmTypes[$data[0] - 1] : 'UNKNOWN';
+
                 return ['type' => 'gsensor_alarm', 'alarmType' => $type];
 
             default:

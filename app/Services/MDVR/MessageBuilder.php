@@ -42,7 +42,7 @@ class MessageBuilder
     }
 
     /**
-     * Build message header (12 bytes for JTT808-2011/2013 compatibility)
+     * Build message header (17 bytes for JTT808-2019)
      */
     private function buildHeader(int $messageId, int $bodyLength, string $phoneNumber, ?int $serialNumber): array
     {
@@ -53,14 +53,16 @@ class MessageBuilder
         ];
 
         // Properties (2 bytes)
-        // Bit 0-9: body length, Bit 10-12: encryption (0), Bit 13: multi-packet (0)
-        // NO version flag for 2011/2013 compatibility
-        $properties = $bodyLength & 0x03FF;
+        // Bit 0-9: body length, Bit 10-12: encryption (0), Bit 13: multi-packet (0), Bit 14: version flag (1)
+        $properties = ($bodyLength & 0x03FF) | (1 << 14); // Version flag = 1 for JTT808-2019
         $header[] = ($properties >> 8) & 0xFF;
         $header[] = $properties & 0xFF;
 
-        // Phone number (6 bytes BCD for 2011/2013 format)
-        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 6);
+        // Protocol version (1 byte) - 1 for JTT808-2019
+        $header[] = 0x01;
+
+        // Phone number (10 bytes BCD)
+        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 10);
         $header = array_merge($header, $phoneBcd);
 
         // Serial number (2 bytes)
