@@ -256,14 +256,23 @@ class TcpServer
 
         $this->log("Registration - Manufacturer: {$manufacturerId}, Model: {$terminalModel}, ID: {$terminalId}, Plate: {$plateNumber}");
 
-        // Check if device already registered - use existing auth code
-        if (isset($this->devices[$phoneNumber]['authCode'])) {
+
+        // Check if device already registered
+        $isReregistration = isset($this->devices[$phoneNumber]['authCode']);
+        
+        if ($isReregistration) {
             $authCode = $this->devices[$phoneNumber]['authCode'];
-            $this->log("Device already registered - using existing auth code: {$authCode}");
-        } else {
-            // Generate a fixed auth code based on device phone number (deterministic)
-            $authCode = substr(md5('mdvr_auth_' . $phoneNumber), 0, 16);
+            $this->log("Device already registered - returning result=3 (already registered)");
+            
+            // Send registration response with result=3 (terminal already registered)
+            // This tells the camera to use its existing auth code
+            $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 3, '');
+            $this->sendResponse($connectionId, $response);
+            return;
         }
+        
+        // First time registration - generate fixed auth code
+        $authCode = substr(md5('mdvr_auth_' . $phoneNumber), 0, 16);
 
         // Store device info
         $this->devices[$phoneNumber] = [
