@@ -101,22 +101,20 @@ class MessageBuilder
 
     /**
      * Build Registration Response (0x8100)
-     * Per Ultravision documentation Table 3.3.2:
-     * - Byte 0-1: Reply serial number (WORD)
-     * - Byte 2: Result (BYTE)
-     * - Byte 3: Reserved (empty byte)
-     * - Byte 4+: Authentication code (STRING)
+     * CORRECTED FORMAT:
+     * - Byte 0-1: Reply serial number (WORD) - MUST match device's message serial
+     * - Byte 2: Result (BYTE) - 0x00 for success
+     * - Byte 3+: Authentication code (STRING) - REQUIRED for success
      */
     public function buildRegistrationResponse(string $phoneNumber, int $replySerial, int $result, string $authCode = ''): array
     {
         $body = [
             ($replySerial >> 8) & 0xFF,  // Byte 0
             $replySerial & 0xFF,          // Byte 1
-            $result & 0xFF,               // Byte 2
-            0x00,                         // Byte 3 - Reserved per doc
+            $result & 0xFF,               // Byte 2 - MUST be 0x00 for success
         ];
 
-        // Add auth code starting at byte 4
+        // Auth code starts at byte 3 - REQUIRED for device to proceed to 0x0102
         if ($result === 0 && !empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
             $body = array_merge($body, $authBytes);
