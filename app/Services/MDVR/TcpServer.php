@@ -269,10 +269,16 @@ class TcpServer
             'registeredAt' => date('Y-m-d H:i:s'),
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
+        // Use Terminal ID as auth code (12 chars) - device may expect this
+        $authCode = $terminalId;
+        $this->devices[$phoneNumber]['authCode'] = $authCode;
 
-        // TEST: Don't respond to registration - see if device sends auth (0x0102) automatically
-        // Some devices don't wait for registration response
-        $this->log('Registration received - NOT responding (testing if device sends 0x0102 automatically)');
+        // Send registration response (0x8100) with result=0 and Terminal ID as auth code
+        $phoneRawBytes = $header['phoneNumberRaw'];
+        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone($phoneRawBytes, $serialNumber, 0, $authCode);
+        $this->sendResponse($connectionId, $response);
+
+        $this->log("Registration successful - Auth code: {$authCode}");
     }
 
     /**

@@ -131,11 +131,10 @@ class MessageBuilder
 
     /**
      * Build Registration Response (0x8100) using raw phone bytes
-     * JT808-2019 format with length-prefixed STRING:
+     * Standard JT808 format (no length prefix):
      * - Byte 0-1: Reply serial number (WORD)
      * - Byte 2: Result (BYTE)
-     * - Byte 3: Auth code length (BYTE)
-     * - Byte 4+: Authentication code (STRING data)
+     * - Byte 3+: Authentication code (STRING data)
      */
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
@@ -145,11 +144,10 @@ class MessageBuilder
             $result & 0xFF,               // Byte 2
         ];
 
-        // Auth code with length prefix (JT808-2019 STRING format)
+        // Auth code directly after result - NO length prefix (standard JT808)
         if ($result === 0 && !empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
-            $body[] = count($authBytes) & 0xFF;  // Byte 3: Length
-            $body = array_merge($body, $authBytes);  // Byte 4+: Auth code
+            $body = array_merge($body, $authBytes);
         }
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
