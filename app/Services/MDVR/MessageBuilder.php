@@ -137,10 +137,10 @@ class MessageBuilder
 
     /**
      * Build Registration Response (0x8100) using raw phone bytes
-     * ULV Format per Table 3.3.2:
+     * ULV Format per Table 3.3.2 with length prefix:
      * - Byte 0-1: Reply serial number (WORD)
      * - Byte 2: Result (BYTE)
-     * - Byte 3: Padding (0x00)
+     * - Byte 3: Auth code length (BYTE) - the gap in table is for length
      * - Byte 4+: Authentication code (STRING data)
      */
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
@@ -149,13 +149,13 @@ class MessageBuilder
             ($replySerial >> 8) & 0xFF,  // Byte 0
             $replySerial & 0xFF,          // Byte 1
             $result & 0xFF,               // Byte 2
-            0x00,                         // Byte 3 - ULV Padding
         ];
 
-        // Auth code starts at byte 4 per ULV Table 3.3.2
+        // Byte 3 = Length, Byte 4+ = Auth code
         if ($result === 0 && !empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
-            $body = array_merge($body, $authBytes);
+            $body[] = count($authBytes) & 0xFF;  // Byte 3: Length
+            $body = array_merge($body, $authBytes);  // Byte 4+: Auth code
         }
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
