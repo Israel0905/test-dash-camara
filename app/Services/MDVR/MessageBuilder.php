@@ -79,8 +79,14 @@ class MessageBuilder
         // Protocol version (1 byte) - 1 for JTT808-2019
         $header[] = 0x01;
 
-        // Phone number (10 bytes) - use raw bytes directly
-        $header = array_merge($header, $phoneRawBytes);
+        // Phone number (EXACTLY 10 bytes) - use raw bytes directly
+        // CRITICAL: Must be exactly 10 bytes or message will be misaligned
+        $phone10Bytes = array_slice($phoneRawBytes, 0, 10);
+        if (count($phone10Bytes) < 10) {
+            // Pad with zeros at the beginning if needed
+            $phone10Bytes = array_merge(array_fill(0, 10 - count($phone10Bytes), 0x00), $phone10Bytes);
+        }
+        $header = array_merge($header, $phone10Bytes);
 
         // Serial number (2 bytes)
         $serial = $serialNumber ?? $this->getNextSerialNumber();
