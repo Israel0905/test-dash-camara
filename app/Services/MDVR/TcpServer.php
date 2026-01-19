@@ -269,8 +269,8 @@ class TcpServer
             'registeredAt' => date('Y-m-d H:i:s'),
             'phoneNumberRaw' => $header['phoneNumberRaw'],
         ];
-        // Use empty auth code (Simple Acknowledgement)
-        $authCode = '';
+        // Use 888888 with length prefix format
+        $authCode = '888888';
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         // Send registration response (0x8100) with result=0 and Terminal ID as auth code
