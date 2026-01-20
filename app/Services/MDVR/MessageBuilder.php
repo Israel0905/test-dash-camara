@@ -151,14 +151,10 @@ class MessageBuilder
             $result & 0xFF,               // Byte 2
         ];
 
-        // Byte 3 = Padding (0x00), Byte 4+ = Auth code
-        if ($result === 0) {
-            $body[] = 0x00; // Byte 3: Padding
-            
-            $authBytes = !empty($authCode) ? array_values(unpack('C*', $authCode)) : [];
-            if (!empty($authBytes)) {
-                $body = array_merge($body, $authBytes);  // Byte 4+: Auth code
-            }
+        // Auth code starts at byte 3 (standard JT808)
+        if ($result === 0 && !empty($authCode)) {
+            $authBytes = array_values(unpack('C*', $authCode));
+            $body = array_merge($body, $authBytes);
         }
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
