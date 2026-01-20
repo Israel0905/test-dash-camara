@@ -107,28 +107,72 @@ class StartMdvrServer extends Command
 
     private function handleRegistration($socket, $phoneRaw, $terminalSerial)
     {
-        $authCode = "123456"; // Código simple para asegurar compatibilidad N6
+        $authCode = "123456";
 
-        /**
-         * ESTRUCTURA CORRECTA 0x8100:
-         * 1. Reply Serial (2 bytes) -> Debe ser el serial del equipo (0 en tu log)
-         * 2. Result (1 byte) -> 0 = Éxito
-         * 3. Auth Code (n bytes)
-         */
+        // Cuerpo del mensaje 0x8100 (Tabla 3.3.2)
         $body = [
-            ($terminalSerial >> 8) & 0xFF,
-            $terminalSerial & 0xFF,
-            0x00,
+            ($terminalSerial >> 8) & 0xFF, // Reply Serial MSB
+            $terminalSerial & 0xFF,        // Reply Serial LSB
+            0x00,                          // Result: Success
         ];
-
-        // Añadimos el código de autenticación
+        // Añadir Auth Code como String
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
 
-        // Generamos respuesta con Serial de Servidor propio (null)
-        $response = $this->builder->buildMessageWithRawPhone(0x8100, $body, $phoneRaw, null);
-        $this->send($socket, $response, "Respuesta Registro (0x8100)");
+        // --- CONSTRUCCIÓN MANUAL DEL HEADER 2019 (Tabla 2.2.2) ---
+        $msgId = 0x8100;
+        $bodyLen = count($body);
+
+        // Propiedades: Bit 14 = 1 (Version), Bits 0-9 = Body Length
+        $properties = (1 << 14) | $bodyLen;
+
+        $header = [
+            ($msgId >> 8) & 0xFF,
+            $msgId & 0xFF,
+            ($properties >> 8) & 0xFF,
+            $properties & 0xFF,
+            0x01, // PROTOCOL VERSION (Tabla 2.2.2 - Start Byte 4)
+        ];
+
+        // Teléfono (BCD 10 bytes según tu manual Tabla 2.2.2)
+        // El manual pide 10 bytes para el teléfono en 2019
+        foreach ($phoneRaw as $b) {
+            $header[] = $b;
+        }
+
+        // Message Serial (del servidor)
+        static $serverSerial = 0;
+        $header[] = ($serverSerial >> 8) & 0xFF;
+        $header[] = $serverSerial & 0xFF;
+        $serverSerial++;
+
+        // Unir Header + Body para el Checksum
+        $fullMessage = array_merge($header, $body);
+
+        // 2.2.4 Check Code (XOR)
+        $checksum = 0;
+        foreach ($fullMessage as $byte) {
+            $checksum ^= $byte;
+        }
+        $fullMessage[] = $checksum;
+
+        // 2.2.1 Escape Processing
+        $escapedMessage = [0x7E];
+        foreach ($fullMessage as $byte) {
+            if ($byte === 0x7E) {
+                $escapedMessage[] = 0x7D;
+                $escapedMessage[] = 0x02;
+            } elseif ($byte === 0x7D) {
+                $escapedMessage[] = 0x7D;
+                $escapedMessage[] = 0x01;
+            } else {
+                $escapedMessage[] = $byte;
+            }
+        }
+        $escapedMessage[] = 0x7E;
+
+        $this->send($socket, $escapedMessage, "0x8100 JT/T 808-2019");
     }
 
     private function handleAuthentication($socket, $header)
