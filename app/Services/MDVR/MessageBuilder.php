@@ -60,8 +60,8 @@ class MessageBuilder
     }
 
     /**
-     * Build message header using raw phone bytes (JTT808-2013: 12 bytes total)
-     * Format: MsgID(2) + Props(2) + Phone(6) + Serial(2)
+     * Build message header using raw phone bytes (JTT808-2019: 17+ bytes total)
+     * Format: MsgID(2) + Props(2) + Version(1) + Phone(10) + Serial(2)
      */
     private function buildHeaderWithRawPhone(int $messageId, int $bodyLength, array $phoneRawBytes, ?int $serialNumber): array
     {
@@ -72,27 +72,28 @@ class MessageBuilder
         ];
 
         // Properties (2 bytes)
-        // Bit 0-9: body length. Bit 14: version flag = 0 (for 6-byte phone)
-        $properties = ($bodyLength & 0x03FF);
+        // Bit 0-9: body length. Bit 14: version flag = 1 (JTT808-2019)
+        $properties = ($bodyLength & 0x03FF) | (1 << 14);
         $header[] = ($properties >> 8) & 0xFF;
         $header[] = $properties & 0xFF;
 
-        // Protocol version (1 byte) - REMOVED for JTT808-2013
+        // Protocol version (1 byte) - Required for 2019
+        $header[] = 0x01; // Version 1
 
-        // Phone number (EXACTLY 6 bytes)
-        // Capture the LAST 6 bytes
-        $phone6Bytes = $phoneRawBytes;
-        if (count($phoneRawBytes) > 6) {
-            $phone6Bytes = array_slice($phoneRawBytes, -6);
-        } elseif (count($phoneRawBytes) < 6) {
+        // Phone number (EXACTLY 10 bytes)
+        // Ensure 10 bytes with padding if needed
+        $phone10Bytes = $phoneRawBytes;
+        if (count($phoneRawBytes) > 10) {
+            $phone10Bytes = array_slice($phoneRawBytes, -10);
+        } elseif (count($phoneRawBytes) < 10) {
             // Pad with zeros at the beginning
-            $phone6Bytes = array_merge(array_fill(0, 6 - count($phoneRawBytes), 0x00), $phoneRawBytes);
+            $phone10Bytes = array_merge(array_fill(0, 10 - count($phoneRawBytes), 0x00), $phoneRawBytes);
         }
 
-        $hexPhone = ProtocolHelper::bytesToHexString($phone6Bytes);
-        echo "[DEBUG] Header Phone Bytes: {$hexPhone}" . PHP_EOL;
+        $hexPhone = ProtocolHelper::bytesToHexString($phone10Bytes);
+        echo "[DEBUG] Header Phone Bytes (2019): {$hexPhone}" . PHP_EOL;
 
-        $header = array_merge($header, $phone6Bytes);
+        $header = array_merge($header, $phone10Bytes);
 
         // Serial number (2 bytes)
         $serial = $serialNumber ?? $this->getNextSerialNumber();
