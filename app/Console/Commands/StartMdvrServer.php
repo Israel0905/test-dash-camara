@@ -109,22 +109,22 @@ class StartMdvrServer extends Command
     {
         $authCode = "123456";
 
-        // Cuerpo del mensaje 0x8100 (Tabla 3.3.2)
+        // 1. Cuerpo (Tabla 3.3.2)
         $body = [
-            ($terminalSerial >> 8) & 0xFF, // Reply Serial MSB
-            $terminalSerial & 0xFF,        // Reply Serial LSB
-            0x00,                          // Result: Success
+            ($terminalSerial >> 8) & 0xFF,
+            $terminalSerial & 0xFF,
+            0x00, // Success
         ];
-        // Añadir Auth Code como String
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
 
-        // --- CONSTRUCCIÓN MANUAL DEL HEADER 2019 (Tabla 2.2.2) ---
+        // 2. Encabezado Manual (Ajustado a lo que el equipo mandó en el RAW)
         $msgId = 0x8100;
         $bodyLen = count($body);
 
-        // Propiedades: Bit 14 = 1 (Version), Bits 0-9 = Body Length
+        // IMPORTANTE: Si el equipo mandó 6 bytes de teléfono, 
+        // respondemos con 6 bytes aunque el manual diga 10.
         $properties = (1 << 14) | $bodyLen;
 
         $header = [
@@ -132,32 +132,28 @@ class StartMdvrServer extends Command
             $msgId & 0xFF,
             ($properties >> 8) & 0xFF,
             $properties & 0xFF,
-            0x01, // PROTOCOL VERSION (Tabla 2.2.2 - Start Byte 4)
+            0x01, // Protocol Version
         ];
 
-        // Teléfono (BCD 10 bytes según tu manual Tabla 2.2.2)
-        // El manual pide 10 bytes para el teléfono en 2019
+        // USAR EXACTAMENTE LOS BYTES QUE VIENEN EN EL RAW (6 BYTES)
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
-        // Message Serial (del servidor)
-        static $serverSerial = 0;
+        // Serial del Mensaje (Servidor)
+        static $serverSerial = 1;
         $header[] = ($serverSerial >> 8) & 0xFF;
         $header[] = $serverSerial & 0xFF;
         $serverSerial++;
 
-        // Unir Header + Body para el Checksum
+        // 3. Checksum y Escape
         $fullMessage = array_merge($header, $body);
-
-        // 2.2.4 Check Code (XOR)
         $checksum = 0;
         foreach ($fullMessage as $byte) {
             $checksum ^= $byte;
         }
         $fullMessage[] = $checksum;
 
-        // 2.2.1 Escape Processing
         $escapedMessage = [0x7E];
         foreach ($fullMessage as $byte) {
             if ($byte === 0x7E) {
@@ -172,7 +168,7 @@ class StartMdvrServer extends Command
         }
         $escapedMessage[] = 0x7E;
 
-        $this->send($socket, $escapedMessage, "0x8100 JT/T 808-2019");
+        $this->send($socket, $escapedMessage, "0x8100 Fix (Phone 6-bytes)");
     }
 
     private function handleAuthentication($socket, $header)
