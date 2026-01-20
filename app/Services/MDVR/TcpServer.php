@@ -625,13 +625,12 @@ class TcpServer
 
     private function sendResponse(string $connectionId, array $response): void
     {
+
         // 1. $response debe ser SOLO el contenido (Header + Body + Checksum)
         // SIN los 7E de los extremos.
 
         // 2. Aplicas el escape al contenido
         $escaped = ProtocolHelper::escape($response);
-
-        echo ("Escaped data issssssssssssssssssssssss " . $escaped . "\n");
 
         // 3. RECIÉN AQUÍ agregas los delimitadores físicos 7E
         $finalPayload = array_merge([0x7E], $escaped, [0x7E]);
