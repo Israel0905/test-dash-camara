@@ -194,26 +194,29 @@ class MessageBuilder
      */
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
-        // 1. Reply Serial (2 bytes)
+        // Byte 0-1: Reply Serial (2 bytes)
         $body = [
             ($replySerial >> 8) & 0xFF,
             $replySerial & 0xFF,
         ];
 
-        // 2. Result (1 byte)
+        // Byte 2: Result Code (1 byte)
         $body[] = $result & 0xFF;
 
-        // 3. Auth Code (JT/T 808-2019 especifica que es el resto del mensaje)
-        if ($result === 0 && !empty($authCode)) {
-            $authBytes = array_values(unpack('C*', $authCode));
+        if ($result === 0) {
+            // IMPORTANTE: En muchos terminales 2019, si el resultado es 0, 
+            // esperan el código de autenticación inmediatamente.
+            // Pero si el MDVR te sigue ignorando, probaremos enviando el código 
+            // tal cual lo envió él en el cuerpo del registro.
+
+            $authBytes = !empty($authCode) ? array_values(unpack('C*', $authCode)) : [];
             $body = array_merge($body, $authBytes);
         }
 
-        // DEBUG para ver qué estamos mandando exactamente en el cuerpo
-        echo "[DEBUG-BODY] ReplySerial: " . sprintf('%04X', $replySerial) . " | Result: {$result} | Auth: {$authCode}" . PHP_EOL;
-
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
     }
+
+
     /**
      * Build Query Resources Request (0x9205)
      */
