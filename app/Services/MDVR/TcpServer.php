@@ -625,18 +625,18 @@ class TcpServer
 
     private function sendResponse(string $connectionId, array $response): void
     {
+        // 1. $response ya debería contener: Header + Body + Checksum
+        // 2. Aplicamos escape SOLO al contenido
+        $escapedPayload = ProtocolHelper::escape($response);
 
-        // 1. $response debe ser SOLO el contenido (Header + Body + Checksum)
-        // SIN los 7E de los extremos.
+        // 3. Envolvemos con el delimitador SIN ESCAPAR
+        $finalFrame = array_merge([0x7E], $escapedPayload, [0x7E]);
 
-        // 2. Aplicas el escape al contenido
-        $escaped = ProtocolHelper::escape($response);
-
-        // 3. RECIÉN AQUÍ agregas los delimitadores físicos 7E
-        $finalPayload = array_merge([0x7E], $escaped, [0x7E]);
+        $hexResponse = ProtocolHelper::bytesToHexString($finalFrame);
+        $this->log("Sending: {$hexResponse}");
 
         $connection = $this->connections[$connectionId]['connection'];
-        $connection->write(pack('C*', ...$finalPayload));
+        $connection->write(pack('C*', ...$finalFrame));
     }
 
     /**
