@@ -57,22 +57,22 @@ class MessageBuilder
         // Body Starts at 17
         echo "╠══════════════════════ BODY (Start 17) ════════════════════╣" . PHP_EOL;
         if ($totalBytes > 17) {
-            // Reply Serial (2 bytes)
-            echo "║ [17-18] Reply Serial   : " . ProtocolHelper::bytesToHexString(array_slice($content, 17, 2)) . PHP_EOL;
-            // Result (1 byte)
-            if (isset($content[19])) {
-                echo "║ [19]    Result Code    : " . sprintf("%02X", $content[19]) . " (Expect 00)" . PHP_EOL;
+            $bodyOnly = array_slice($content, 17);
+            echo "║ Hex: " . ProtocolHelper::bytesToHexString($bodyOnly) . PHP_EOL;
+
+            // Si es respuesta de registro 0x8100
+            if ($messageId === 0x8100) {
+                echo "║ [17-18] Reply Serial : " . ProtocolHelper::bytesToHexString(array_slice($content, 17, 2)) . PHP_EOL;
+                echo "║ [19]    Result       : " . sprintf("%02X", $content[19]) . PHP_EOL;
+                echo "║ [20+]   Auth Code    : " . ProtocolHelper::bytesToHexString(array_slice($content, 20)) . PHP_EOL;
             }
-            // Auth Len (1 byte) - Standard
-            if (isset($content[20])) {
-                echo "║ [20]    Auth Code Len  : " . sprintf("%02X", $content[20]) . PHP_EOL;
-            }
-            // Auth Code
-            if ($totalBytes > 21) {
-                echo "║ [21+]   Auth Code      : " . ProtocolHelper::bytesToHexString(array_slice($content, 21)) . PHP_EOL;
+            // Si es respuesta general 0x8001
+            elseif ($messageId === 0x8001) {
+                echo "║ [17-18] Reply Serial : " . ProtocolHelper::bytesToHexString(array_slice($content, 17, 2)) . PHP_EOL;
+                echo "║ [19-20] Reply Msg ID : " . ProtocolHelper::bytesToHexString(array_slice($content, 19, 2)) . PHP_EOL;
+                echo "║ [21]    Result       : " . sprintf("%02X", $content[21]) . PHP_EOL;
             }
         }
-
         $checksum = ProtocolHelper::calculateChecksum($content);
         echo "╠═══════════════════════════════════════════════════════════╣" . PHP_EOL;
         echo "║ Calc Checksum : " . sprintf("%02X", $checksum) . PHP_EOL;
@@ -154,24 +154,24 @@ class MessageBuilder
     }
 
 
-    public function buildRegistrationResponse(array $phoneRaw, int $replySerial, string $authCode): array
+    public function buildRegistrationResponse(string $phoneNumber, int $replySerial, string $authCode): array
     {
-        $authBytes = array_values(unpack('C*', $authCode));
-
-        // Construcción EXPLÍCITA del cuerpo (16 bytes exactos para código de 12)
+        // 1. Reply Serial (2 bytes)
         $body = [
-            ($replySerial >> 8) & 0xFF, // Byte 0
-            $replySerial & 0xFF,        // Byte 1
-            0x00,                       // Byte 2: Resultado Éxito
-            count($authBytes),          // Byte 3: Longitud (0x0C)
+            ($replySerial >> 8) & 0xFF,
+            $replySerial & 0xFF,
         ];
 
+        // 2. Resultado Éxito (1 byte)
+        $body[] = 0x00;
+
+        // 3. Auth Code (STRING - Directo sin byte de longitud)
+        $authBytes = array_values(unpack('C*', $authCode));
         foreach ($authBytes as $b) {
             $body[] = $b;
         }
 
-        // Enviamos a construir con el ID 0x8100
-        return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRaw);
+        return $this->buildMessage(0x8100, $body, $phoneNumber);
     }
 
     /**
@@ -193,7 +193,7 @@ class MessageBuilder
         // 2. Result Code (1 byte)
         $body[] = $result & 0xFF;
 
-        // 3. Auth Code (String - Directo sin byte de longitud)
+        // 3. Auth Code (STRING - Directo sin byte de longitud)
         if ($result === 0 && $authCode !== '') {
             $authBytes = array_values(unpack('C*', $authCode));
             foreach ($authBytes as $byte) {
