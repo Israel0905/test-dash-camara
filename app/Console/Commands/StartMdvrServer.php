@@ -78,23 +78,20 @@ class StartMdvrServer extends Command
 
     private function respondRegistration($socket, $phoneRaw, $terminalSerial)
     {
-        // INTENTO A: Usar un Auth Code que termine en 0x00 (Null Terminator)
-        // A veces el equipo lo lee como string de C y si no hay nulo, se sigue de largo.
         $authCode = "123456";
 
+        // CUERPO SEGÚN MANUAL 2019 (Tabla 3.3.2):
+        // Byte 0-1: Reply Serial Number (El serial que mandó la cámara)
+        // Byte 2: Result (0: Success)
+        // Byte 3-n: Authentication Code
         $body = [
             ($terminalSerial >> 8) & 0xFF,
             $terminalSerial & 0xFF,
-            0x00, // Resultado: Éxito
+            0x00,
         ];
-
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
-
-        // Agregamos un byte NULO al final por si el MDVR espera terminación de cadena
-        // Esto cambiará la longitud del cuerpo de 9 a 10.
-        $body[] = 0x00;
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
