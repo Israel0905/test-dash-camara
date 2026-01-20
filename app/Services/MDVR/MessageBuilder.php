@@ -36,6 +36,18 @@ class MessageBuilder
         $content = array_merge($header, $body);
 
         // Calculate checksum
+        $checksumStr = ProtocolHelper::bytesToHexString($content);
+        $headerHex = ProtocolHelper::bytesToHexString($header);
+        $bodyHex = ProtocolHelper::bytesToHexString($body);
+
+        echo PHP_EOL;
+        echo "╔════════════ MESSAGE STRUCTURE DEBUG (PRE-ESCAPE) ════════════╗" . PHP_EOL;
+        echo "║ Complete Hex : {$checksumStr}" . PHP_EOL;
+        echo "╠══════════════════════════════════════════════════════════════╣" . PHP_EOL;
+        echo "║ Header       : {$headerHex}" . PHP_EOL;
+        echo "║ Body         : {$bodyHex}" . PHP_EOL;
+        echo "╚══════════════════════════════════════════════════════════════╝" . PHP_EOL;
+
         $checksum = ProtocolHelper::calculateChecksum($content);
         $content[] = $checksum;
 

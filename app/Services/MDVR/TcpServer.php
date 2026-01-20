@@ -288,7 +288,7 @@ class TcpServer
         ];
 
         // Generate simple ASCII auth code as requested
-        $authCode = "123456";
+        $authCode = "1234";
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         // Use raw phone bytes if available to ensure exact Terminal ID match
