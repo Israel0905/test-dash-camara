@@ -30,24 +30,17 @@ class MessageBuilder
         int $messageId,
         array $body,
         array $phoneRawBytes,
-        ?int $replySerialNumber = null
+        ?int $forcedSerial = null // Cambiamos el nombre para claridad
     ): array {
-        $header = $this->buildHeader2019($messageId, count($body), $phoneRawBytes, $replySerialNumber);
+        // Usamos forcedSerial si queremos repetir uno, o null para el siguiente correlativo
+        $header = $this->buildHeader2019($messageId, count($body), $phoneRawBytes, $forcedSerial);
         $content = array_merge($header, $body);
 
-        // Debug (optional)
-        /*
-        echo PHP_EOL . "HEX: " . ProtocolHelper::bytesToHexString($content) . PHP_EOL;
-        */
-
-        // Checksum
         $checksum = ProtocolHelper::calculateChecksum($content);
         $content[] = $checksum;
 
-        // Escape
         $escaped = ProtocolHelper::escape($content);
 
-        // Wrap
         return array_merge(
             [ProtocolHelper::START_DELIMITER],
             $escaped,
@@ -80,7 +73,8 @@ class MessageBuilder
         $header[] = 0x01;
 
         // Phone (exact 10 bytes BCD)
-        $phone10 = array_pad(array_slice($phoneRawBytes, -10), 10, 0x00);
+        // Ensure strictly 10 bytes, left-padded with 0x00 if shorter
+        $phone10 = array_pad(array_slice($phoneRawBytes, -10), -10, 0x00);
         $header = array_merge($header, $phone10);
 
         // Serial
@@ -148,10 +142,11 @@ class MessageBuilder
      */
     public function buildRegistrationResponseWithRawPhone(
         array $phoneRawBytes,
-        int $replySerial,
+        int $replySerial, // Estees el serial que vino del MDVR (ej: 0)
         int $result,
         string $authCode = ''
     ): array {
+        // EL CUERPO: Aquí SÍ va el serial del MDVR
         $body = [
             ($replySerial >> 8) & 0xFF,
             $replySerial & 0xFF,
@@ -159,12 +154,15 @@ class MessageBuilder
         ];
 
         if ($result === 0 && $authCode !== '') {
+            // OPCIONAL: Si sigue fallando, prueba añadir aquí: $body[] = strlen($authCode);
             foreach (unpack('C*', $authCode) as $b) {
                 $body[] = $b;
             }
         }
 
-        return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRawBytes);
+        // EL ENCABEZADO: Debe usar un serial NUEVO (null para que llame a nextSerial)
+        // Pasamos null en el 4to parámetro para que buildHeader2019 genere uno nuevo
+        return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRawBytes, null);
     }
 
     /**

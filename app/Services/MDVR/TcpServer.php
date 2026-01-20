@@ -308,6 +308,7 @@ class TcpServer
         $this->sendResponse($connectionId, $response);
 
         $this->log("Registration successful - Auth code: {$authCode}");
+        echo "[DEBUG] 0x8100 Reply Serial: " . sprintf("%04X", $serialNumber) . " (Must match 0x0100 Serial)" . PHP_EOL;
     }
 
     /**
