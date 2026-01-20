@@ -284,7 +284,7 @@ class TcpServer
         );
         $this->sendResponse($connectionId, $response);
 
-        $this->log("Registration successful - Auth code: {$authCode} (with length prefix 0x0C)");
+        $this->log("Registration successful - Auth code: {$authCode} (with padding 0x00)");
     }
 
     /**
