@@ -153,6 +153,27 @@ class MessageBuilder
         return $this->buildMessage(ProtocolHelper::MSG_SERVER_GENERAL_RESPONSE, $body, $phoneNumber);
     }
 
+
+    public function buildRegistrationResponse(array $phoneRaw, int $replySerial, string $authCode): array
+    {
+        $authBytes = array_values(unpack('C*', $authCode));
+
+        // Construcción EXPLÍCITA del cuerpo (16 bytes exactos para código de 12)
+        $body = [
+            ($replySerial >> 8) & 0xFF, // Byte 0
+            $replySerial & 0xFF,        // Byte 1
+            0x00,                       // Byte 2: Resultado Éxito
+            count($authBytes),          // Byte 3: Longitud (0x0C)
+        ];
+
+        foreach ($authBytes as $b) {
+            $body[] = $b;
+        }
+
+        // Enviamos a construir con el ID 0x8100
+        return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRaw);
+    }
+
     /**
      * Build Registration Response (0x8100)
      * Format:

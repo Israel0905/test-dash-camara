@@ -292,13 +292,19 @@ class TcpServer
         $authCode = "000000992002";
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
-        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
-            $header['phoneNumberRaw'],
-            $serialNumber, // Original msg serial (JTT808 requirement for Body)
-            0,
-            $authCode
-        );
-
+        // Use raw phone bytes if available to ensure exact Terminal ID match
+        if (isset($header['phoneNumberRaw'])) {
+            echo "Using raw phone bytes";
+            $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
+                $header['phoneNumberRaw'],
+                $serialNumber, // Original msg serial (JTT808 requirement for Body)
+                0,
+                $authCode
+            );
+        } else {
+            echo "Using without raw phone number";
+            $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 0, $authCode);
+        }
 
         $this->sendResponse($connectionId, $response);
 
@@ -355,14 +361,6 @@ class TcpServer
 
         // Send success response
         $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 0);
-
-        // --- SUCCESS DEBUG LOGGING ---
-        echo PHP_EOL;
-        echo "✅✅✅ AUTHENTICATION SUCCESSFUL for {$phoneNumber} ✅✅✅" . PHP_EOL;
-        echo "✅ Device is now ONLINE and READY to transmit data." . PHP_EOL;
-        echo "✅ IMEI: " . ($this->devices[$phoneNumber]['imei'] ?? 'Unknown') . PHP_EOL;
-        echo PHP_EOL;
-
         $this->log("Authentication successful for {$phoneNumber}");
     }
 
