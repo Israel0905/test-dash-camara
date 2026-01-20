@@ -151,14 +151,10 @@ class MessageBuilder
             $result & 0xFF,               // Byte 2: Result
         ];
 
-        // Add padding and auth code (per ULV Table 3.3.2)
-        if ($result === 0) {
-            $body[] = 0x00;  // Byte 3: Padding (0x00)
-            
-            if (!empty($authCode)) {
-                $authBytes = array_values(unpack('C*', $authCode));
-                $body = array_merge($body, $authBytes);  // Byte 4+: Auth code
-            }
+        // Add auth code (simple ASCII string)
+        if ($result === 0 && !empty($authCode)) {
+            $authBytes = array_values(unpack('C*', $authCode));
+            $body = array_merge($body, $authBytes);
         }
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
