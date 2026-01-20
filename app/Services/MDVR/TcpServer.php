@@ -325,6 +325,7 @@ class TcpServer
         }
 
         $authCodeLength = $body[0];
+
         if (count($body) < 1 + $authCodeLength) {
             $this->log("Invalid authentication body length", 'error');
             // Send failure
@@ -333,7 +334,8 @@ class TcpServer
         }
 
         //verificar este authcode
-        $authCode = implode('', array_map('chr', array_slice($body, 1, $authCodeLength)));
+        $authCode = trim(implode('', array_map('chr', $body)), "\x00");
+
         $storedAuthCode = $this->devices[$phoneNumber]['authCode'] ?? null;
 
         $this->log("Authentication - Received: {$authCode}, Expected: {$storedAuthCode}");
