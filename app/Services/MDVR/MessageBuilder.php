@@ -192,29 +192,40 @@ class MessageBuilder
      * - Byte 3: Padding (0x00)
      * - Byte 4+: Authentication code (STRING)
      */
-    public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
-    {
-        // Byte 0-1: Reply Serial (2 bytes)
+    public function buildRegistrationResponseWithRawPhone(
+        array $phoneRawBytes,
+        int $replySerial,
+        int $result,
+        string $authCode = ''
+    ): array {
+        // Byte 0-1: Reply Serial
         $body = [
             ($replySerial >> 8) & 0xFF,
             $replySerial & 0xFF,
         ];
 
-        // Byte 2: Result Code (1 byte)
+        // Byte 2: Result
         $body[] = $result & 0xFF;
 
         if ($result === 0) {
-            $authBytes = !empty($authCode) ? array_values(unpack('C*', $authCode)) : [];
+            // Auth code bytes (ASCII)
+            $authBytes = array_values(unpack('C*', $authCode));
+            $authLen   = count($authBytes); // ← CRÍTICO
 
-            // Byte 3: Longitud del código de autenticación (1 byte)
-            $body[] = count($authBytes);
+            // Byte 3: Auth Code Length
+            $body[] = $authLen & 0xFF;
 
-            // Byte 4+: Los bytes del código
+            // Byte 4+: Auth Code
             $body = array_merge($body, $authBytes);
         }
 
-        return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
+        return $this->buildMessageWithRawPhone(
+            ProtocolHelper::MSG_REGISTRATION_RESPONSE,
+            $body,
+            $phoneRawBytes
+        );
     }
+
     /**
      * Build Query Resources Request (0x9205)
      */
