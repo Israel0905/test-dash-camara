@@ -625,24 +625,19 @@ class TcpServer
 
     private function sendResponse(string $connectionId, array $response): void
     {
-        if (! isset($this->connections[$connectionId])) return;
+        if (! isset($this->connections[$connectionId])) {
+            return;
+        }
 
-        // 1. El array $response YA DEBE incluir: Header + Body + Checksum.
-        // NO metas los 0x7E aquí todavía.
-
-        // 2. Aplicamos escape a TODA la trama (incluyendo el checksum que está al final)
-        $escapedPayload = ProtocolHelper::escape($response);
-
-        // 3. Envolvemos con el delimitador inicial y final (estos NUNCA se escapan)
-        $finalFrame = array_merge([0x7E], $escapedPayload, [0x7E]);
-
-        $hexResponse = ProtocolHelper::bytesToHexString($finalFrame);
-
-        // Log para depuración física
-        $this->log("PHYSICAL SEND (Escaped): {$hexResponse}");
+        // Como MessageBuilder ya entrega la trama con 7E y Escapada, 
+        // aquí solo la enviamos directamente.
+        $hexResponse = ProtocolHelper::bytesToHexString($response);
+        $this->log("Sending Physical: {$hexResponse}");
 
         $connection = $this->connections[$connectionId]['connection'];
-        $connection->write(pack('C*', ...$finalFrame));
+
+        // Convertimos el array de bytes a string binario y enviamos
+        $connection->write(pack('C*', ...$response));
     }
 
     /**
