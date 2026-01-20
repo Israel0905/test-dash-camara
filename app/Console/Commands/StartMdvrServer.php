@@ -113,14 +113,14 @@ class StartMdvrServer extends Command
 
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
+        // Código de autenticación que la cámara DEBE recibir para quedar feliz
         $authCode = "123456";
 
-        // Tabla 3.3.2 del Manual:
-        // Cuerpo: Reply Serial(2) + Result(1) + Auth Code(String)
+        // Cuerpo 0x8100: Reply Serial(2) + Result(1) + Auth Code(String)
         $body = [
-            ($devSerial >> 8) & 0xFF, // El serial que la cámara mandó
+            ($devSerial >> 8) & 0xFF,
             $devSerial & 0xFF,
-            0x00,                     // 0 = Éxito
+            0x00, // 0 = Éxito
         ];
 
         foreach (str_split($authCode) as $char) {
@@ -134,56 +134,58 @@ class StartMdvrServer extends Command
     {
         $bodyLen = count($body);
 
-        // CAMBIO CRÍTICO: 
-        // Algunos firmwares N6 no aceptan el bit 14 (0x4000) en la respuesta del servidor.
-        // Vamos a dejar el bit 14 en 0, pero manteniendo el byte 0x01 de versión.
-        $attr = $bodyLen;
+        // Atributos: 2019 recomienda bit 14 activo si el equipo envió bit 14 activo.
+        // Tu log RECV muestra 40 64 (bit 14 activo), así que responderemos igual.
+        $attr = (1 << 14) | $bodyLen;
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,
+            $msgId & 0xFF, // ID Mensaje (2 bytes)
             ($attr >> 8) & 0xFF,
-            ($attr & 0xFF),
-            0x01, // Byte de Protocol Version (Requerido en 2019 aunque el attr sea 0)
+            ($attr & 0xFF), // Atributos (2 bytes)
+            0x01,                                // Protocol Version (1 byte)
         ];
 
+        // Teléfono (10 bytes BCD)
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
+        // Serial del mensaje del SERVIDOR
         static $srvSerial = 1;
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
         $srvSerial = ($srvSerial + 1) % 65535;
 
-        $full = array_merge($header, $body);
+        // Unimos Header y Cuerpo para calcular Checksum
+        $fullMessage = array_merge($header, $body);
 
-        // Checksum
+        // --- CÁLCULO DE CHECKSUM XOR ---
         $cs = 0;
-        foreach ($full as $b) {
-            $cs ^= $b;
+        foreach ($fullMessage as $byte) {
+            $cs ^= $byte;
         }
-        $full[] = $cs;
+        $fullMessage[] = $cs; // Agregamos el resultado al final
 
-        // Escape
-        $final = [0x7E];
-        foreach ($full as $b) {
+        // --- ESCAPADO DE CARACTERES ESPECIALES ---
+        $escaped = [0x7E];
+        foreach ($fullMessage as $b) {
             if ($b === 0x7E) {
-                $final[] = 0x7D;
-                $final[] = 0x02;
+                $escaped[] = 0x7D;
+                $escaped[] = 0x02;
             } elseif ($b === 0x7D) {
-                $final[] = 0x7D;
-                $final[] = 0x01;
+                $escaped[] = 0x7D;
+                $escaped[] = 0x01;
             } else {
-                $final[] = $b;
+                $escaped[] = $b;
             }
         }
-        $final[] = 0x7E;
+        $escaped[] = 0x7E;
 
-        $hexOut = strtoupper(bin2hex(pack('C*', ...$final)));
+        $hexOut = strtoupper(bin2hex(pack('C*', ...$escaped)));
         $this->line("<fg=green>[SEND HEX]</>: " . implode(' ', str_split($hexOut, 2)));
 
-        @socket_write($socket, pack('C*', ...$final));
+        @socket_write($socket, pack('C*', ...$escaped));
     }
 
     private function parseLocation($body)
