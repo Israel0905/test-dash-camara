@@ -91,7 +91,6 @@ class MessageBuilder
         }
 
         $hexPhone = ProtocolHelper::bytesToHexString($phone10Bytes);
-        echo "[DEBUG] Header Phone Bytes (2019): {$hexPhone}" . PHP_EOL;
 
         $header = array_merge($header, $phone10Bytes);
 
@@ -99,6 +98,8 @@ class MessageBuilder
         $serial = $serialNumber ?? $this->getNextSerialNumber();
         $header[] = ($serial >> 8) & 0xFF;
         $header[] = $serial & 0xFF;
+
+        echo "[DEBUG] Header Built (v2019) -> Phone: {$hexPhone}, Server Serial: " . sprintf('%04X', $serial) . PHP_EOL;
 
         return $header;
     }
@@ -152,23 +153,28 @@ class MessageBuilder
      */
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
+        // Body: [ReplySerial(2)] + [Result(1)] + [AuthLen(1)] + [AuthCode(N)]
         $body = [
-            ($replySerial >> 8) & 0xFF,  // Byte 0: Serial high
-            $replySerial & 0xFF,          // Byte 1: Serial low
+            ($replySerial >> 8) & 0xFF,  // Byte 0: Reply Serial high
+            $replySerial & 0xFF,          // Byte 1: Reply Serial low
             $result & 0xFF,               // Byte 2: Result
         ];
 
         // Add auth code (simple ASCII string)
-        if ($result === 0 && !empty($authCode)) {
-            $authBytes = array_values(unpack('C*', $authCode));
+        if ($result === 0) {
+            // Auth Code
+            $authBytes = !empty($authCode) ? array_values(unpack('C*', $authCode)) : [];
             $authLen = count($authBytes);
 
-            // Add Length Byte (Critical Fix)
+            // Byte 3: Length of Auth Code
             $body[] = $authLen;
 
-            $body = array_merge($body, $authBytes);
+            // Bytes 4+: Auth Code itself
+            if ($authLen > 0) {
+                $body = array_merge($body, $authBytes);
+            }
 
-            echo "[DEBUG] Estructura 0x8100 -> Serial: {$replySerial}, Result: {$result}, AuthLen: {$authLen}, AuthCode: {$authCode}" . PHP_EOL;
+            echo "[DEBUG] 0x8100 Body Construction -> ReplySerial: " . sprintf('%04X', $replySerial) . ", Result: {$result}, AuthLen: {$authLen}, AuthCode: {$authCode}" . PHP_EOL;
         }
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
