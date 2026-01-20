@@ -287,9 +287,8 @@ class TcpServer
             'phoneNumberRaw' => $header['phoneNumberRaw'] ?? null,
         ];
 
-        // Generate simple ASCII auth code as requested
-
-        $authCode = bin2hex(random_bytes(8));
+        // Persist/Get AuthCode from File Store
+        $authCode = AuthCodeStore::get($phoneNumber);
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         // Use raw phone bytes if available to ensure exact Terminal ID match
@@ -328,13 +327,13 @@ class TcpServer
         // o el inicio del mismo. Intentamos leerlo de forma limpia:
         $authCode = trim(implode('', array_map('chr', $body)), "\x00");
 
-        // Si tu código es "000000992002", el MDVR podría mandar bytes extra (IMEI/Versión)
-        // Así que validamos que al menos COMIENCE con el código esperado:
-        $storedAuthCode = $this->devices[$phoneNumber]['authCode'] ?? "000000992002";
+        // Validate using File Store
+        $isValid = AuthCodeStore::validate($phoneNumber, $authCode);
+        // Debug
+        $expected = AuthCodeStore::get($phoneNumber);
+        $this->log("Auth - Recibido: {$authCode}, Esperado: {$expected}");
 
-        $this->log("Auth - Recibido: {$authCode}, Esperado: {$storedAuthCode}");
-
-        if (strpos($authCode, $storedAuthCode) === false) {
+        if (! $isValid) {
             $this->log("Authentication failed: Code mismatch", 'error');
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 1);
             return;
