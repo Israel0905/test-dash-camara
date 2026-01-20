@@ -294,6 +294,7 @@ class TcpServer
 
         // Use raw phone bytes if available to ensure exact Terminal ID match
         if (isset($header['phoneNumberRaw'])) {
+            echo "Using raw phone bytes";
             $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
                 $header['phoneNumberRaw'],
                 $serialNumber, // Original msg serial (JTT808 requirement for Body)
@@ -301,6 +302,7 @@ class TcpServer
                 $authCode
             );
         } else {
+            echo "Using without raw phone number";
             $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 0, $authCode);
         }
 

@@ -175,24 +175,26 @@ class MessageBuilder
 
         return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRaw);
     }
+
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
+        // 1. Construir el Cuerpo (BODY)
         $body = [
-            ($replySerial >> 8) & 0xFF, // WORD: Serial del mensaje original del dispositivo
+            ($replySerial >> 8) & 0xFF, // WORD: Serial del mensaje del equipo
             $replySerial & 0xFF,
-            $result & 0xFF,             // BYTE: 0 = Éxito
+            $result & 0xFF,             // BYTE: 0 para éxito
         ];
 
         if ($result === 0) {
             $authBytes = array_values(unpack('C*', $authCode));
-            $body[] = count($authBytes); // BYTE: Longitud del código
+            $body[] = count($authBytes); // BYTE: Longitud exacta (Ej: 12 -> 0x0C)
             $body = array_merge($body, $authBytes);
         }
 
-        // IMPORTANTE: No debe haber un 0x00 al final si no es parte del código
+        // 2. Construir el mensaje completo
+        // Asegúrate de que buildMessageWithRawPhone use count($body) para el header
         return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRawBytes);
     }
-
 
 
     /**
