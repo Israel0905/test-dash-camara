@@ -78,15 +78,16 @@ class StartMdvrServer extends Command
 
     private function respondRegistration($socket, $phoneRaw, $terminalSerial)
     {
-        // En algunos N6, si el resultado es 0 (éxito), el código de autenticación 
-        // debe ser el ID del terminal o una cadena fija.
         $authCode = "123456";
 
-        // CUERPO: Reply Serial(2) + Result(1) + AuthCode
+        // CUERPO SEGÚN MANUAL 2019 (Tabla 3.3.2):
+        // Byte 0-1: Reply Serial Number (El serial que mandó la cámara)
+        // Byte 2: Result (0: Success)
+        // Byte 3-n: Authentication Code
         $body = [
             ($terminalSerial >> 8) & 0xFF,
             $terminalSerial & 0xFF,
-            0x00, // 0 = Success
+            0x00,
         ];
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
@@ -110,24 +111,30 @@ class StartMdvrServer extends Command
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
-        $attr = (1 << 14) | count($body); // Bit 14 = 2019 mode
+        $bodyLen = count($body);
+        $attr = (1 << 14) | $bodyLen; // Bit 14 activo (Versión 2019)
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,
+            $msgId & 0xFF,   // Message ID
             ($attr >> 8) & 0xFF,
-            ($attr & 0xFF),
-            0x01, // Version
+            ($attr & 0xFF),   // Propiedades
+            0x01,                                  // Protocol Version
         ];
+
         foreach ($phoneRaw as $b) {
             $header[] = $b;
-        }
+        } // Teléfono (10 bytes)
 
-        // IMPORTANTE: El Serial del servidor debe incrementarse
+        // El Serial del Servidor SOLO va aquí, en el Header.
         static $srvSerial = 0;
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
         $srvSerial = ($srvSerial + 1) % 65535;
+
+        // Mostrar Header para tu paz mental
+        $this->comment("Header: " . implode(' ', array_map(fn($b) => sprintf('%02X', $b), $header)));
+        $this->comment("Cuerpo: " . implode(' ', array_map(fn($b) => sprintf('%02X', $b), $body)));
 
         $full = array_merge($header, $body);
 
