@@ -198,33 +198,30 @@ class MessageBuilder
         int $result,
         string $authCode = ''
     ): array {
-        // Byte 0-1: Reply Serial
+        // Reply Serial (2 bytes)
         $body = [
             ($replySerial >> 8) & 0xFF,
             $replySerial & 0xFF,
         ];
 
-        // Byte 2: Result
+        // Result
         $body[] = $result & 0xFF;
 
         if ($result === 0) {
-            // Auth code bytes (ASCII)
             $authBytes = array_values(unpack('C*', $authCode));
-            $authLen   = count($authBytes); // ← CRÍTICO
 
-            // Byte 3: Auth Code Length
-            $body[] = $authLen & 0xFF;
-
-            // Byte 4+: Auth Code
-            $body = array_merge($body, $authBytes);
+            // ULV non-standard auth format
+            $body[] = 0x00; // padding
+            $body   = array_merge($body, $authBytes);
         }
 
         return $this->buildMessageWithRawPhone(
-            ProtocolHelper::MSG_REGISTRATION_RESPONSE,
+            ProtocolHelper::MSG_REGISTRATION_RESPONSE, // 0x8100
             $body,
             $phoneRawBytes
         );
     }
+
 
     /**
      * Build Query Resources Request (0x9205)
