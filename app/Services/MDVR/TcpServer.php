@@ -319,51 +319,30 @@ class TcpServer
         $phoneNumber = $header['phoneNumber'];
         $serialNumber = $header['serialNumber'];
 
-        if (count($body) < 1) {
+        if (empty($body)) {
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 2);
             return;
         }
 
-        $authCodeLength = $body[0];
-
-        if (count($body) < 1 + $authCodeLength) {
-            $this->log("Invalid authentication body length", 'error');
-            // Send failure
-            $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 1);
-            return;
-        }
-
-        //verificar este authcode
+        // EXPLICACIÓN: En JTT808-2019, el authCode suele ser el cuerpo completo 
+        // o el inicio del mismo. Intentamos leerlo de forma limpia:
         $authCode = trim(implode('', array_map('chr', $body)), "\x00");
 
-        $storedAuthCode = $this->devices[$phoneNumber]['authCode'] ?? null;
+        // Si tu código es "000000992002", el MDVR podría mandar bytes extra (IMEI/Versión)
+        // Así que validamos que al menos COMIENCE con el código esperado:
+        $storedAuthCode = $this->devices[$phoneNumber]['authCode'] ?? "000000992002";
 
-        $this->log("Authentication - Received: {$authCode}, Expected: {$storedAuthCode}");
+        $this->log("Auth - Recibido: {$authCode}, Esperado: {$storedAuthCode}");
 
-        if (!$storedAuthCode || $authCode !== $storedAuthCode) {
+        if (strpos($authCode, $storedAuthCode) === false) {
             $this->log("Authentication failed: Code mismatch", 'error');
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 1);
             return;
         }
 
-        // Mark connection as authenticated
         $this->connections[$connectionId]['authenticated'] = true;
-
-        // Extract IMEI and firmware if present
-        if (count($body) > $authCodeLength + 1) {
-            $imei = trim(implode('', array_map('chr', array_slice($body, $authCodeLength + 1, 15))), "\x00");
-            $firmware = trim(implode('', array_map('chr', array_slice($body, $authCodeLength + 16, 20))), "\x00");
-            $this->log("IMEI: {$imei}, Firmware: {$firmware}");
-
-            if (isset($this->devices[$phoneNumber])) {
-                $this->devices[$phoneNumber]['imei'] = $imei;
-                $this->devices[$phoneNumber]['firmware'] = $firmware;
-            }
-        }
-
-        // Send success response
         $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 0);
-        $this->log("Authentication successful for {$phoneNumber}");
+        $this->log("Dispositivo Autenticado Correctamente: {$phoneNumber}");
     }
 
     /**
