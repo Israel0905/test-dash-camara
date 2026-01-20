@@ -82,48 +82,53 @@ class StartMdvrServer extends Command
     {
         $authCode = "123456";
 
-        // CUERPO 0x8100: Reply Serial(2) + Result(1) + AuthCode(String)
+        // 1. CUERPO (Tabla 3.3.2): Serial Terminal (2) + Resultado (1) + Auth Code (Str)
         $body = [
             ($terminalSerial >> 8) & 0xFF,
             $terminalSerial & 0xFF,
-            0x00, // Success
+            0x00, // 0: Success
         ];
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
 
-        // HEADER 0x8100
+        // 2. PROPIEDADES (Tabla 2.2.2.1)
         $bodyLen = count($body);
-        $attr = (1 << 14) | $bodyLen;
+        $attr = (1 << 14) | $bodyLen; // Bit 14: Version 2019, Bits 0-9: Len
 
+        // 3. HEADER (Tabla 2.2.2)
         $header = [
             0x81,
-            0x00,              // Msg ID
+            0x00,              // Message ID
             ($attr >> 8) & 0xFF,
-            ($attr & 0xFF), // Attr
-            0x01,                    // Protocol Version
+            ($attr & 0xFF), // Message Body Attributes
+            0x01,                    // Protocol Version (2019)
         ];
 
-        // El teléfono DEBE ser de 10 bytes según el manual 2019
+        // TELÉFONO: El manual dice BCD[10]. 
+        // Si phoneRaw ya trae 10 bytes del RECV, los usamos directo.
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
+        // SERIAL DEL MENSAJE (Del Servidor)
+        // Nota: El equipo puede ser sensible a que este serial sea 0 o empiece en 1.
         static $srvSerial = 1;
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
         $srvSerial++;
 
+        // 4. PAQUETE COMPLETO
         $full = array_merge($header, $body);
 
-        // Checksum
+        // 5. CHECK CODE (XOR de todos los bytes entre 7E)
         $cs = 0;
         foreach ($full as $b) {
             $cs ^= $b;
         }
         $full[] = $cs;
 
-        // Escape
+        // 6. ESCAPE (Tabla 2.2.1)
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
@@ -138,7 +143,10 @@ class StartMdvrServer extends Command
         }
         $final[] = 0x7E;
 
-        socket_write($socket, pack('C*', ...$final));
-        $this->info("[SEND] 0x8100: " . implode(' ', array_map(fn($b) => sprintf('%02X', $b), $final)));
+        // 7. ENVÍO
+        $binary = pack('C*', ...$final);
+        socket_write($socket, $binary, strlen($binary));
+
+        $this->info("[SEND] " . implode(' ', array_map(fn($b) => sprintf('%02X', $b), $final)));
     }
 }
