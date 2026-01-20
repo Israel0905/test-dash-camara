@@ -2,63 +2,169 @@
 
 namespace App\Console\Commands;
 
-use App\Services\MDVR\TcpServer;
 use Illuminate\Console\Command;
-use React\EventLoop\Loop;
+use App\Services\MDVR\MessageBuilder;
+use App\Services\MDVR\ProtocolHelper;
 
 class StartMdvrServer extends Command
 {
     /**
-     * The name and signature of the console command.
-     *
-     * @var string
+     * El nombre y firma del comando.
      */
-    protected $signature = 'mdvr:serve 
-                            {--host= : Host to bind to}
-                            {--port= : Port to listen on}';
+    protected $signature = 'mdvr:start {--port=8808}';
 
     /**
-     * The console command description.
-     *
-     * @var string
+     * Descripción del comando.
      */
-    protected $description = 'Start the MDVR/JTT808 TCP server to receive data from dash cameras';
+    protected $description = 'Inicia el servidor TCP para recibir conexiones de MDVR (JT/T 808)';
 
-    /**
-     * Execute the console command.
-     */
-    public function handle(): int
+    private $builder;
+
+    public function __construct(MessageBuilder $builder)
     {
-        $host = $this->option('host') ?? config('mdvr.server.host', '0.0.0.0');
-        $port = $this->option('port') ?? config('mdvr.server.port', 8808);
+        parent::__construct();
+        $this->builder = $builder;
+    }
 
-        // Override config
-        config(['mdvr.server.host' => $host]);
-        config(['mdvr.server.port' => $port]);
+    public function handle()
+    {
+        $port = $this->option('port');
+        $address = '0.0.0.0';
 
-        $this->info('╔══════════════════════════════════════════════════════════╗');
-        $this->info('║           MDVR Server - JTT808/JTT1078 Protocol           ║');
-        $this->info('╠══════════════════════════════════════════════════════════╣');
-        $this->info("║  Host: {$host}");
-        $this->info("║  Port: {$port}");
-        $this->info('║  Protocol: JTT808-2019 / JTT1078-2016');
-        $this->info('╚══════════════════════════════════════════════════════════╝');
-        $this->newLine();
-        $this->info('Press Ctrl+C to stop the server.');
-        $this->newLine();
+        $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
 
-        try {
-            $server = new TcpServer;
-            $server->start();
-
-            // Run the event loop
-            Loop::run();
-        } catch (\Exception $e) {
-            $this->error('Failed to start server: ' . $e->getMessage());
-
-            return Command::FAILURE;
+        if (!socket_bind($socket, $address, $port)) {
+            $this->error("No se pudo enlazar al puerto $port");
+            return;
         }
 
-        return Command::SUCCESS;
+        socket_listen($socket);
+        $this->info("[MDVR] Servidor iniciado en $address:$port");
+
+        $clients = [$socket];
+
+        while (true) {
+            $read = $clients;
+            $write = null;
+            $except = null;
+
+            if (socket_select($read, $write, $except, 0, 1000000) > 0) {
+                foreach ($read as $s) {
+                    if ($s === $socket) {
+                        $newSocket = socket_accept($socket);
+                        $clients[] = $newSocket;
+                        socket_getpeername($newSocket, $ip);
+                        $this->info("[MDVR] Nueva conexión desde: $ip");
+                    } else {
+                        $input = @socket_read($s, 2048);
+                        if ($input === false || $input === '') {
+                            $key = array_search($s, $clients);
+                            unset($clients[$key]);
+                            socket_close($s);
+                            continue;
+                        }
+
+                        $this->processBuffer($s, $input);
+                    }
+                }
+            }
+        }
+    }
+
+    private function processBuffer($socket, $input)
+    {
+        $bytes = array_values(unpack('C*', $input));
+        $hex = ProtocolHelper::bytesToHexString($bytes);
+        $this->line("<fg=gray>[RAW] $hex</>");
+
+        $message = ProtocolHelper::parseMessage($bytes);
+        if (!$message || !$message['valid']) {
+            return;
+        }
+
+        $header = $message['header'];
+        $msgId = $header['messageId'];
+        $phoneRaw = $header['phoneNumberRaw'];
+        $terminalSerial = $header['serialNumber'];
+
+        $this->info("[RECV] Msg: 0x" . sprintf('%04X', $msgId) . " | Phone: {$header['phoneNumber']} | Serial: $terminalSerial");
+
+        switch ($msgId) {
+            case 0x0100: // REGISTRO
+                $this->handleRegistration($socket, $phoneRaw, $terminalSerial);
+                break;
+
+            case 0x0102: // AUTENTICACIÓN
+                $this->handleAuthentication($socket, $header);
+                break;
+
+            case 0x0002: // HEARTBEAT
+                $this->handleGeneralResponse($socket, $header, 0x0002);
+                break;
+        }
+    }
+
+    private function handleRegistration($socket, $phoneRaw, $terminalSerial)
+    {
+        $authCode = "123456"; // Código simple para asegurar compatibilidad N6
+
+        /**
+         * ESTRUCTURA CORRECTA 0x8100:
+         * 1. Reply Serial (2 bytes) -> Debe ser el serial del equipo (0 en tu log)
+         * 2. Result (1 byte) -> 0 = Éxito
+         * 3. Auth Code (n bytes)
+         */
+        $body = [
+            ($terminalSerial >> 8) & 0xFF,
+            $terminalSerial & 0xFF,
+            0x00,
+        ];
+
+        // Añadimos el código de autenticación
+        foreach (str_split($authCode) as $char) {
+            $body[] = ord($char);
+        }
+
+        // Generamos respuesta con Serial de Servidor propio (null)
+        $response = $this->builder->buildMessageWithRawPhone(0x8100, $body, $phoneRaw, null);
+        $this->send($socket, $response, "Respuesta Registro (0x8100)");
+    }
+
+    private function handleAuthentication($socket, $header)
+    {
+        // El equipo envía 0x0102 después de un registro exitoso. 
+        // Respondemos con una Respuesta General 0x8001
+        $body = [
+            ($header['serialNumber'] >> 8) & 0xFF,
+            $header['serialNumber'] & 0xFF,
+            (0x0102 >> 8) & 0xFF,
+            0x0102 & 0xFF,
+            0x00, // Resultado: OK
+        ];
+
+        $response = $this->builder->buildMessageWithRawPhone(0x8001, $body, $header['phoneNumberRaw'], null);
+        $this->send($socket, $response, "Respuesta Autenticación (0x8001)");
+        $this->info("<fg=green;options=bold>¡EQUIPO ONLINE Y AUTENTICADO!</>");
+    }
+
+    private function handleGeneralResponse($socket, $header, $replyMsgId)
+    {
+        $body = [
+            ($header['serialNumber'] >> 8) & 0xFF,
+            $header['serialNumber'] & 0xFF,
+            ($replyMsgId >> 8) & 0xFF,
+            $replyMsgId & 0xFF,
+            0x00,
+        ];
+        $response = $this->builder->buildMessageWithRawPhone(0x8001, $body, $header['phoneNumberRaw'], null);
+        $this->send($socket, $response, "General Response to 0x" . sprintf('%04X', $replyMsgId));
+    }
+
+    private function send($socket, $data, $label)
+    {
+        $binary = pack('C*', ...$data);
+        @socket_write($socket, $binary, strlen($binary));
+        $this->comment("[SEND] $label: " . ProtocolHelper::bytesToHexString($data));
     }
 }
