@@ -154,7 +154,14 @@ class MessageBuilder
         // Add auth code (simple ASCII string)
         if ($result === 0 && !empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
+            $authLen = count($authBytes);
+
+            // Add Length Byte (Critical Fix)
+            $body[] = $authLen;
+
             $body = array_merge($body, $authBytes);
+
+            echo "[DEBUG] Estructura 0x8100 -> Serial: {$replySerial}, Result: {$result}, AuthLen: {$authLen}, AuthCode: {$authCode}" . PHP_EOL;
         }
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
