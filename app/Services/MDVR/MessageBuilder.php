@@ -91,6 +91,7 @@ class MessageBuilder
         );
     }
 
+
     /**
      * Build message header using raw phone bytes (JTT808-2019: 17+ bytes total)
      * Format: MsgID(2) + Props(2) + Version(1) + Phone(10) + Serial(2)
@@ -159,12 +160,21 @@ class MessageBuilder
      * - Byte 2: Result (BYTE) - 0x00 for success
      * - Byte 3+: Authentication code (STRING)
      */
-    public function buildRegistrationResponse(string $phoneNumber, int $replySerial, int $result, string $authCode = ''): array
+    public function buildRegistrationResponse(array $phoneRaw, int $replySerial, string $authCode): array
     {
-        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 10);
-        return $this->buildRegistrationResponseWithRawPhone($phoneBcd, $replySerial, $result, $authCode);
-    }
+        $authBytes = array_values(unpack('C*', $authCode));
+        $authLen = count($authBytes);
 
+        // CONSTRUIR CUERPO (Exactamente 16 bytes para un código de 12)
+        $body = [];
+        $body[] = ($replySerial >> 8) & 0xFF; // Serial recibido del equipo
+        $body[] = $replySerial & 0xFF;
+        $body[] = 0x00;
+        $body[] = $authLen;
+        $body = array_merge($body, $authBytes);
+
+        return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRaw);
+    }
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
         $body = [
