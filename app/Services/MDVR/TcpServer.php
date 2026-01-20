@@ -272,8 +272,8 @@ class TcpServer
         // Use Phone Number (992002) with Padding 00 format
         $authCode = $phoneNumber;
 
-        // Use Length Prefix + 123456 (Byte 3 = 0x06 length, not 0x00 padding)
-        $authCode = '123456';
+        // Use Length Prefix + Terminal ID (device often requires auth code = its own ID)
+        $authCode = $terminalId; // "000000992002" - Length will be 12 (0x0C)
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
@@ -284,7 +284,7 @@ class TcpServer
         );
         $this->sendResponse($connectionId, $response);
 
-        $this->log("Registration successful - Auth code: {$authCode} (with length prefix 0x06)");
+        $this->log("Registration successful - Auth code: {$authCode} (with length prefix 0x0C)");
     }
 
     /**
