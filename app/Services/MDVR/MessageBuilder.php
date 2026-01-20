@@ -194,32 +194,26 @@ class MessageBuilder
      */
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
-        // Estructura Estándar JT/T 808:
-        // Byte 0-1: Reply Serial (WORD)
-        // Byte 2: Result (0: success, 1: terminal already registered, 2: no such vehicle, 3: terminal already bound...)
-        // Byte 3+: Auth Code (STRING) - ALGUNOS EQUIPOS NO ESPERAN EL BYTE DE LONGITUD AQUÍ
-
+        // 1. Reply Serial (2 bytes)
         $body = [
             ($replySerial >> 8) & 0xFF,
             $replySerial & 0xFF,
-            $result & 0xFF,
         ];
 
-        if ($result === 0) {
-            // Probaremos enviando el Auth Code DIRECTAMENTE como string (sin el byte de longitud en la posición 3)
-            // ya que el protocolo dice que el resto del cuerpo es el Auth Code.
-            $authBytes = !empty($authCode) ? array_values(unpack('C*', $authCode)) : [];
+        // 2. Result (1 byte)
+        $body[] = $result & 0xFF;
 
-            // NO agregues $body[] = count($authBytes); <--- QUITA ESTA LÍNEA
-
-            if (count($authBytes) > 0) {
-                $body = array_merge($body, $authBytes);
-            }
+        // 3. Auth Code (JT/T 808-2019 especifica que es el resto del mensaje)
+        if ($result === 0 && !empty($authCode)) {
+            $authBytes = array_values(unpack('C*', $authCode));
+            $body = array_merge($body, $authBytes);
         }
+
+        // DEBUG para ver qué estamos mandando exactamente en el cuerpo
+        echo "[DEBUG-BODY] ReplySerial: " . sprintf('%04X', $replySerial) . " | Result: {$result} | Auth: {$authCode}" . PHP_EOL;
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
     }
-
     /**
      * Build Query Resources Request (0x9205)
      */
