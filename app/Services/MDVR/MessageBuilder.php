@@ -160,21 +160,6 @@ class MessageBuilder
      * - Byte 2: Result (BYTE) - 0x00 for success
      * - Byte 3+: Authentication code (STRING)
      */
-    public function buildRegistrationResponse(array $phoneRaw, int $replySerial, string $authCode): array
-    {
-        $authBytes = array_values(unpack('C*', $authCode));
-        $authLen = count($authBytes);
-
-        // CONSTRUIR CUERPO (Exactamente 16 bytes para un código de 12)
-        $body = [];
-        $body[] = ($replySerial >> 8) & 0xFF; // Serial recibido del equipo
-        $body[] = $replySerial & 0xFF;
-        $body[] = 0x00;
-        $body[] = $authLen;
-        $body = array_merge($body, $authBytes);
-
-        return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRaw);
-    }
 
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {

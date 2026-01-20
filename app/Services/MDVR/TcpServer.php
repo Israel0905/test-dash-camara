@@ -292,19 +292,13 @@ class TcpServer
         $authCode = "000000992002";
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
-        // Use raw phone bytes if available to ensure exact Terminal ID match
-        if (isset($header['phoneNumberRaw'])) {
-            echo "Using raw phone bytes";
-            $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
-                $header['phoneNumberRaw'],
-                $serialNumber, // Original msg serial (JTT808 requirement for Body)
-                0,
-                $authCode
-            );
-        } else {
-            echo "Using without raw phone number";
-            $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 0, $authCode);
-        }
+        $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
+            $header['phoneNumberRaw'],
+            $serialNumber, // Original msg serial (JTT808 requirement for Body)
+            0,
+            $authCode
+        );
+
 
         $this->sendResponse($connectionId, $response);
 
