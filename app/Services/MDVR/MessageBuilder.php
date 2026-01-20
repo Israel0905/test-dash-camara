@@ -37,18 +37,47 @@ class MessageBuilder
 
         // Calculate checksum
         $checksumStr = ProtocolHelper::bytesToHexString($content);
-        $headerHex = ProtocolHelper::bytesToHexString($header);
-        $bodyHex = ProtocolHelper::bytesToHexString($body);
+        $totalBytes = count($content);
 
         echo PHP_EOL;
-        echo "╔════════════ MESSAGE STRUCTURE DEBUG (PRE-ESCAPE) ════════════╗" . PHP_EOL;
-        echo "║ Complete Hex : {$checksumStr}" . PHP_EOL;
-        echo "╠══════════════════════════════════════════════════════════════╣" . PHP_EOL;
-        echo "║ Header       : {$headerHex}" . PHP_EOL;
-        echo "║ Body         : {$bodyHex}" . PHP_EOL;
-        echo "╚══════════════════════════════════════════════════════════════╝" . PHP_EOL;
+        echo "╔════════════ STRICT OFFSET DEBUG (JTT808-2019) ════════════╗" . PHP_EOL;
+        echo "║ Full Hex : {$checksumStr}" . PHP_EOL;
+        echo "╠═══════════════════════════════════════════════════════════╣" . PHP_EOL;
+
+        // Analyze offsets (Assumes Standard 2019 Header is 17 bytes)
+        // Header: 0-3 (MsgId+Props)
+        echo "║ [00-03] Header Fijo    : " . ProtocolHelper::bytesToHexString(array_slice($content, 0, 4)) . PHP_EOL;
+        // Version: 4
+        echo "║ [04]    Version Byte   : " . sprintf("%02X", $content[4]) . " (Expect 01)" . PHP_EOL;
+        // Phone: 5-14
+        echo "║ [05-14] Phone No       : " . ProtocolHelper::bytesToHexString(array_slice($content, 5, 10)) . PHP_EOL;
+        // Server Serial: 15-16
+        echo "║ [15-16] Server Serial  : " . ProtocolHelper::bytesToHexString(array_slice($content, 15, 2)) . PHP_EOL;
+
+        // Body Starts at 17
+        echo "╠══════════════════════ BODY (Start 17) ════════════════════╣" . PHP_EOL;
+        if ($totalBytes > 17) {
+            // Reply Serial (2 bytes)
+            echo "║ [17-18] Reply Serial   : " . ProtocolHelper::bytesToHexString(array_slice($content, 17, 2)) . PHP_EOL;
+            // Result (1 byte)
+            if (isset($content[19])) {
+                echo "║ [19]    Result Code    : " . sprintf("%02X", $content[19]) . " (Expect 00)" . PHP_EOL;
+            }
+            // Auth Len (1 byte) - Standard
+            if (isset($content[20])) {
+                echo "║ [20]    Auth Code Len  : " . sprintf("%02X", $content[20]) . PHP_EOL;
+            }
+            // Auth Code
+            if ($totalBytes > 21) {
+                echo "║ [21+]   Auth Code      : " . ProtocolHelper::bytesToHexString(array_slice($content, 21)) . PHP_EOL;
+            }
+        }
 
         $checksum = ProtocolHelper::calculateChecksum($content);
+        echo "╠═══════════════════════════════════════════════════════════╣" . PHP_EOL;
+        echo "║ Calc Checksum : " . sprintf("%02X", $checksum) . PHP_EOL;
+        echo "╚═══════════════════════════════════════════════════════════╝" . PHP_EOL;
+
         $content[] = $checksum;
 
         // Escape content
