@@ -109,44 +109,44 @@ class StartMdvrServer extends Command
     {
         $authCode = "123456";
 
-        // 1. Cuerpo (Tabla 3.3.2)
+        // CUERPO 0x8100 ESTRICTO 2019
         $body = [
-            ($terminalSerial >> 8) & 0xFF,
+            ($terminalSerial >> 8) & 0xFF, // Byte 0-1: Reply Serial
             $terminalSerial & 0xFF,
-            0x00, // Success
+            0x00,                          // Byte 2: Resultado (0 = Éxito)
+            // El estándar 2019 requiere que el AuthCode sea precedido por su longitud
+            strlen($authCode)
         ];
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
 
-        // 2. Encabezado Manual (Ajustado a lo que el equipo mandó en el RAW)
+        // CABECERA 2019 ESTRICTA
         $msgId = 0x8100;
         $bodyLen = count($body);
-
-        // IMPORTANTE: Si el equipo mandó 6 bytes de teléfono, 
-        // respondemos con 6 bytes aunque el manual diga 10.
-        $properties = (1 << 14) | $bodyLen;
+        $properties = (1 << 14) | $bodyLen; // Bit 14 activo (Versión 2019)
 
         $header = [
             ($msgId >> 8) & 0xFF,
             $msgId & 0xFF,
             ($properties >> 8) & 0xFF,
             $properties & 0xFF,
-            0x01, // Protocol Version
+            0x01, // Version del protocolo
         ];
 
-        // USAR EXACTAMENTE LOS BYTES QUE VIENEN EN EL RAW (6 BYTES)
+        // EL TELÉFONO: En el log el equipo manda 6 bytes. 
+        // Vamos a mandarle los 6 bytes EXACTOS que él mandó.
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
-        // Serial del Mensaje (Servidor)
+        // Serial del mensaje del servidor
         static $serverSerial = 1;
         $header[] = ($serverSerial >> 8) & 0xFF;
         $header[] = $serverSerial & 0xFF;
         $serverSerial++;
 
-        // 3. Checksum y Escape
+        // UNIR, CHECKSUM Y ESCAPE
         $fullMessage = array_merge($header, $body);
         $checksum = 0;
         foreach ($fullMessage as $byte) {
@@ -168,7 +168,7 @@ class StartMdvrServer extends Command
         }
         $escapedMessage[] = 0x7E;
 
-        $this->send($socket, $escapedMessage, "0x8100 Fix (Phone 6-bytes)");
+        $this->send($socket, $escapedMessage, "0x8100 FIX FINAL");
     }
 
     private function handleAuthentication($socket, $header)
