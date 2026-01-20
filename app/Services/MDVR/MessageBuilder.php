@@ -184,36 +184,22 @@ class MessageBuilder
         return $this->buildRegistrationResponseWithRawPhone($phoneBcd, $replySerial, $result, $authCode);
     }
 
-    /**
-     * Build Registration Response (0x8100) using raw phone bytes
-     * ULV Document with Padding (Byte 3 = 0x00):
-     * - Byte 0-1: Reply serial number (WORD)
-     * - Byte 2: Result (BYTE)
-     * - Byte 3: Padding (0x00)
-     * - Byte 4+: Authentication code (STRING)
-     */
-    public function buildRegistrationResponseWithRawPhone(
-        array $phoneRawBytes,
-        int $replySerial,
-        int $result,
-        string $authCode = ''
-    ): array {
+    public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
+    {
         $body = [
-            ($replySerial >> 8) & 0xFF,
+            ($replySerial >> 8) & 0xFF, // WORD: Serial del mensaje original del dispositivo
             $replySerial & 0xFF,
-            $result & 0xFF,
+            $result & 0xFF,             // BYTE: 0 = Éxito
         ];
 
-        if ($result === 0 && $authCode !== '') {
+        if ($result === 0) {
             $authBytes = array_values(unpack('C*', $authCode));
+            $body[] = count($authBytes); // BYTE: Longitud del código
             $body = array_merge($body, $authBytes);
         }
 
-        return $this->buildMessageWithRawPhone(
-            ProtocolHelper::MSG_REGISTRATION_RESPONSE,
-            $body,
-            $phoneRawBytes
-        );
+        // IMPORTANTE: No debe haber un 0x00 al final si no es parte del código
+        return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRawBytes);
     }
 
 
