@@ -272,8 +272,8 @@ class TcpServer
         // Use Phone Number (992002) with Padding 00 format
         $authCode = $phoneNumber;
 
-        // Send registration response (0x8100) with result=0 and PW Label as auth code
-        $authCode = '1122334455';
+        // Use Terminal ID as auth code (pure JTT808-2019 standard)
+        $authCode = $terminalId;
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(

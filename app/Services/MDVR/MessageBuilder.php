@@ -137,23 +137,20 @@ class MessageBuilder
 
     /**
      * Build Registration Response (0x8100) using raw phone bytes
-     * Structure with Reply ID (like 0x8001 General Response):
+     * Pure JTT808-2019 Standard:
      * - Byte 0-1: Reply serial number (WORD)
-     * - Byte 2-3: Reply Message ID (0x0100 = Registration)
-     * - Byte 4: Result (BYTE)
-     * - Byte 5+: Authentication code (STRING)
+     * - Byte 2: Result (BYTE)
+     * - Byte 3+: Authentication code (STRING) - Only if result=0
      */
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
         $body = [
             ($replySerial >> 8) & 0xFF,  // Byte 0: Serial high
             $replySerial & 0xFF,          // Byte 1: Serial low
-            0x01,                          // Byte 2: Reply ID high (0x0100)
-            0x00,                          // Byte 3: Reply ID low
-            $result & 0xFF,               // Byte 4: Result
+            $result & 0xFF,               // Byte 2: Result
         ];
 
-        // Auth code starts at byte 5
+        // Auth code starts at byte 3 (pure standard)
         if ($result === 0 && !empty($authCode)) {
             $authBytes = array_values(unpack('C*', $authCode));
             $body = array_merge($body, $authBytes);
