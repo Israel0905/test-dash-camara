@@ -113,58 +113,59 @@ class StartMdvrServer extends Command
 
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
-        // El manual dice: Auth Code es una STRING. 
-        // Vamos a mandar "123456" sin el nulo final para que la longitud sea 9 exacta.
         $authCode = "123456";
 
+        // Tabla 3.3.2 del Manual:
+        // Cuerpo: Reply Serial(2) + Result(1) + Auth Code(String)
         $body = [
-            ($devSerial >> 8) & 0xFF, // Byte 0: Reply Serial High
-            $devSerial & 0xFF,        // Byte 1: Reply Serial Low
-            0x00,                     // Byte 2: Result (0 = Success)
+            ($devSerial >> 8) & 0xFF, // El serial que la cámara mandó
+            $devSerial & 0xFF,
+            0x00,                     // 0 = Éxito
         ];
 
-        // Bytes 3 en adelante: Authentication Code
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
 
-        // NO agregamos el 0x00 final esta vez para dejarlo en 9 bytes exactos.
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        // Atributos: Bit 14 para 2019, longitud real del cuerpo
-        $attr = (1 << 14) | $bodyLen;
+
+        // CAMBIO CRÍTICO: 
+        // Algunos firmwares N6 no aceptan el bit 14 (0x4000) en la respuesta del servidor.
+        // Vamos a dejar el bit 14 en 0, pero manteniendo el byte 0x01 de versión.
+        $attr = $bodyLen;
 
         $header = [
             ($msgId >> 8) & 0xFF,
             $msgId & 0xFF,
             ($attr >> 8) & 0xFF,
             ($attr & 0xFF),
-            0x01, // Protocol Version 2019
+            0x01, // Byte de Protocol Version (Requerido en 2019 aunque el attr sea 0)
         ];
 
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
-        // IMPORTANTE: Este es el serial del servidor, DEBE ser diferente al de la cámara
-        // para no causar conflictos en el stack TCP de la cámara.
-        static $srvSerial = 1000;
+        static $srvSerial = 1;
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
         $srvSerial = ($srvSerial + 1) % 65535;
 
         $full = array_merge($header, $body);
 
+        // Checksum
         $cs = 0;
         foreach ($full as $b) {
             $cs ^= $b;
         }
         $full[] = $cs;
 
+        // Escape
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
@@ -183,20 +184,6 @@ class StartMdvrServer extends Command
         $this->line("<fg=green>[SEND HEX]</>: " . implode(' ', str_split($hexOut, 2)));
 
         @socket_write($socket, pack('C*', ...$final));
-    }
-
-    private function respondGeneral($socket, $phoneRaw, $devSerial, $replyId)
-    {
-        // Cuerpo 0x8001 (Tabla 3.1.2):
-        // Reply Serial(2) + Reply Msg ID(2) + Result(1)
-        $body = [
-            ($devSerial >> 8) & 0xFF,
-            $devSerial & 0xFF,
-            ($replyId >> 8) & 0xFF,
-            $replyId & 0xFF,
-            0x00 // Success
-        ];
-        $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
 
     private function parseLocation($body)
