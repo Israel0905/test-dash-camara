@@ -115,32 +115,26 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        $attr = (1 << 14) | $bodyLen; // Bit 14 activo (Versión 2019)
+        $attr = (1 << 14) | $bodyLen;
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,   // Message ID
-            ($attr >> 8) & 0xFF,
-            ($attr & 0xFF),   // Propiedades
-            0x01,                                  // Protocol Version
+            $msgId & 0xFF,
+            ($properties >> 8) & 0xFF,
+            ($properties & 0xFF), // Aquí hay un error de variable en tu código anterior, asegúrate que sea $attr
+            0x01,
         ];
-
         foreach ($phoneRaw as $b) {
             $header[] = $b;
-        } // Teléfono (10 bytes)
+        }
 
-        // El Serial del Servidor SOLO va aquí, en el Header.
-        static $srvSerial = 0;
-        $header[] = ($srvSerial >> 8) & 0xFF;
-        $header[] = $srvSerial & 0xFF;
-        $srvSerial = ($srvSerial + 1) % 65535;
-
-        // Mostrar Header para tu paz mental
-        $this->comment("Header: " . implode(' ', array_map(fn($b) => sprintf('%02X', $b), $header)));
-        $this->comment("Cuerpo: " . implode(' ', array_map(fn($b) => sprintf('%02X', $b), $body)));
+        // TRUCO: Usamos el mismo serial que el terminal para el header del servidor
+        // Solo para probar si el firmware del N6 tiene ese bloqueo.
+        // Si no tienes acceso a la variable $terminalSerial aquí, pásala por parámetro.
+        $header[] = ($terminalSerial >> 8) & 0xFF;
+        $header[] = $terminalSerial & 0xFF;
 
         $full = array_merge($header, $body);
-
         $cs = 0;
         foreach ($full as $b) {
             $cs ^= $b;
