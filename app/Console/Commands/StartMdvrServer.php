@@ -8,15 +8,8 @@ use App\Services\MDVR\ProtocolHelper;
 
 class StartMdvrServer extends Command
 {
-    /**
-     * El nombre y firma del comando.
-     */
     protected $signature = 'mdvr:start {--port=8808}';
-
-    /**
-     * Descripción del comando.
-     */
-    protected $description = 'Inicia el servidor TCP para recibir conexiones de MDVR (JT/T 808)';
+    protected $description = 'Servidor JT/T 808 compatible con Ultravision N6 (Protocolo 2019)';
 
     private $builder;
 
@@ -64,7 +57,6 @@ class StartMdvrServer extends Command
                             socket_close($s);
                             continue;
                         }
-
                         $this->processBuffer($s, $input);
                     }
                 }
@@ -76,31 +68,27 @@ class StartMdvrServer extends Command
     {
         $bytes = array_values(unpack('C*', $input));
         $hex = ProtocolHelper::bytesToHexString($bytes);
-        $this->line("<fg=gray>[RAW] $hex</>");
+        $this->line("<fg=gray>[RAW RECV] $hex</>");
 
         $message = ProtocolHelper::parseMessage($bytes);
-        if (!$message || !$message['valid']) {
-            return;
-        }
+        if (!$message || !$message['valid']) return;
 
         $header = $message['header'];
         $msgId = $header['messageId'];
         $phoneRaw = $header['phoneNumberRaw'];
         $terminalSerial = $header['serialNumber'];
 
-        $this->info("[RECV] Msg: 0x" . sprintf('%04X', $msgId) . " | Phone: {$header['phoneNumber']} | Serial: $terminalSerial");
+        $this->info("[RECV] Msg: 0x" . sprintf('%04X', $msgId) . " | Serial: $terminalSerial");
 
         switch ($msgId) {
             case 0x0100: // REGISTRO
                 $this->handleRegistration($socket, $phoneRaw, $terminalSerial);
                 break;
-
             case 0x0102: // AUTENTICACIÓN
-                $this->handleAuthentication($socket, $header);
+                $this->handleAuthentication($socket, $phoneRaw, $terminalSerial);
                 break;
-
             case 0x0002: // HEARTBEAT
-                $this->handleGeneralResponse($socket, $header, 0x0002);
+                $this->handleGeneralResponse($socket, $phoneRaw, $terminalSerial, 0x0002);
                 break;
         }
     }
@@ -109,102 +97,108 @@ class StartMdvrServer extends Command
     {
         $authCode = "123456";
 
-        // CUERPO 0x8100 ESTRICTO 2019
+        // 1. CUERPO (Tabla 3.3.2 del manual)
         $body = [
-            ($terminalSerial >> 8) & 0xFF, // Byte 0-1: Reply Serial
-            $terminalSerial & 0xFF,
-            0x00,                          // Byte 2: Resultado (0 = Éxito)
-            // El estándar 2019 requiere que el AuthCode sea precedido por su longitud
-            strlen($authCode)
+            ($terminalSerial >> 8) & 0xFF, // Reply Serial MSB
+            $terminalSerial & 0xFF,        // Reply Serial LSB
+            0x00,                          // Result: 0 (Success)
         ];
+        // Auth Code como STRING (sin byte de longitud según tabla 3.3.2)
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
 
-        // CABECERA 2019 ESTRICTA
-        $msgId = 0x8100;
-        $bodyLen = count($body);
-        $properties = (1 << 14) | $bodyLen; // Bit 14 activo (Versión 2019)
+        $this->sendJTTMessage($socket, 0x8100, $phoneRaw, $body, "Respuesta Registro (0x8100)");
+    }
 
+    private function handleAuthentication($socket, $phoneRaw, $terminalSerial)
+    {
+        // Respuesta General (Tabla 3.1.2)
+        $body = [
+            ($terminalSerial >> 8) & 0xFF,
+            $terminalSerial & 0xFF,
+            (0x0102 >> 8) & 0xFF,
+            0x0102 & 0xFF,
+            0x00, // Result: Success
+        ];
+        $this->sendJTTMessage($socket, 0x8001, $phoneRaw, $body, "Respuesta Autenticación (0x8001)");
+        $this->info("<fg=green;options=bold>¡EQUIPO ONLINE Y AUTENTICADO!</>");
+    }
+
+    private function handleGeneralResponse($socket, $phoneRaw, $terminalSerial, $replyId)
+    {
+        $body = [
+            ($terminalSerial >> 8) & 0xFF,
+            $terminalSerial & 0xFF,
+            ($replyId >> 8) & 0xFF,
+            $replyId & 0xFF,
+            0x00,
+        ];
+        $this->sendJTTMessage($socket, 0x8001, $phoneRaw, $body, "General Response (0x8001)");
+    }
+
+    /**
+     * CONSTRUCCIÓN DEL MENSAJE SIGUIENDO ESTRICTAMENTE EL MANUAL V2.0.0-2019
+     */
+    private function sendJTTMessage($socket, $msgId, $phoneRaw, $body, $label)
+    {
+        // Propiedades (Tabla 2.2.2.1)
+        // Bit 14 = 1 (Version ID para 2019), Bits 0-9 = Body Length
+        $bodyLen = count($body);
+        $properties = (1 << 14) | $bodyLen;
+
+        // HEADER (Tabla 2.2.2)
         $header = [
             ($msgId >> 8) & 0xFF,
             $msgId & 0xFF,
             ($properties >> 8) & 0xFF,
             $properties & 0xFF,
-            0x01, // Version del protocolo
+            0x01, // Protocol Version (Initial value is 1)
         ];
 
-        // EL TELÉFONO: En el log el equipo manda 6 bytes. 
-        // Vamos a mandarle los 6 bytes EXACTOS que él mandó.
+        // TELÉFONO (BCD[10]): El manual exige 10 bytes. 
+        // Si el MDVR mandó 6, rellenamos con 4 ceros al inicio.
+        $padding = 10 - count($phoneRaw);
+        for ($i = 0; $i < $padding; $i++) {
+            $header[] = 0x00;
+        }
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
         // Serial del mensaje del servidor
-        static $serverSerial = 1;
+        static $serverSerial = 0;
         $header[] = ($serverSerial >> 8) & 0xFF;
         $header[] = $serverSerial & 0xFF;
-        $serverSerial++;
+        $serverSerial = ($serverSerial + 1) % 65535;
 
-        // UNIR, CHECKSUM Y ESCAPE
-        $fullMessage = array_merge($header, $body);
+        // UNIR Y CHECKSUM (Punto 2.2.4)
+        $full = array_merge($header, $body);
         $checksum = 0;
-        foreach ($fullMessage as $byte) {
+        foreach ($full as $byte) {
             $checksum ^= $byte;
         }
-        $fullMessage[] = $checksum;
+        $full[] = $checksum;
 
-        $escapedMessage = [0x7E];
-        foreach ($fullMessage as $byte) {
+        // ESCAPE (Punto 2.2.1)
+        $escaped = [0x7E];
+        foreach ($full as $byte) {
             if ($byte === 0x7E) {
-                $escapedMessage[] = 0x7D;
-                $escapedMessage[] = 0x02;
+                $escaped[] = 0x7D;
+                $escaped[] = 0x02;
             } elseif ($byte === 0x7D) {
-                $escapedMessage[] = 0x7D;
-                $escapedMessage[] = 0x01;
+                $escaped[] = 0x7D;
+                $escaped[] = 0x01;
             } else {
-                $escapedMessage[] = $byte;
+                $escaped[] = $byte;
             }
         }
-        $escapedMessage[] = 0x7E;
+        $escaped[] = 0x7E;
 
-        $this->send($socket, $escapedMessage, "0x8100 FIX FINAL");
-    }
-
-    private function handleAuthentication($socket, $header)
-    {
-        // El equipo envía 0x0102 después de un registro exitoso. 
-        // Respondemos con una Respuesta General 0x8001
-        $body = [
-            ($header['serialNumber'] >> 8) & 0xFF,
-            $header['serialNumber'] & 0xFF,
-            (0x0102 >> 8) & 0xFF,
-            0x0102 & 0xFF,
-            0x00, // Resultado: OK
-        ];
-
-        $response = $this->builder->buildMessageWithRawPhone(0x8001, $body, $header['phoneNumberRaw'], null);
-        $this->send($socket, $response, "Respuesta Autenticación (0x8001)");
-        $this->info("<fg=green;options=bold>¡EQUIPO ONLINE Y AUTENTICADO!</>");
-    }
-
-    private function handleGeneralResponse($socket, $header, $replyMsgId)
-    {
-        $body = [
-            ($header['serialNumber'] >> 8) & 0xFF,
-            $header['serialNumber'] & 0xFF,
-            ($replyMsgId >> 8) & 0xFF,
-            $replyMsgId & 0xFF,
-            0x00,
-        ];
-        $response = $this->builder->buildMessageWithRawPhone(0x8001, $body, $header['phoneNumberRaw'], null);
-        $this->send($socket, $response, "General Response to 0x" . sprintf('%04X', $replyMsgId));
-    }
-
-    private function send($socket, $data, $label)
-    {
-        $binary = pack('C*', ...$data);
+        $binary = pack('C*', ...$escaped);
         @socket_write($socket, $binary, strlen($binary));
-        $this->comment("[SEND] $label: " . ProtocolHelper::bytesToHexString($data));
+
+        $hex = ProtocolHelper::bytesToHexString($escaped);
+        $this->comment("[SEND] $label: $hex");
     }
 }
