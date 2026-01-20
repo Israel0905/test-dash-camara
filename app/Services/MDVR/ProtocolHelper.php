@@ -278,7 +278,7 @@ class ProtocolHelper
     {
         $separator = $withSpaces ? ' ' : '';
 
-        return implode($separator, array_map(fn ($b) => sprintf('%02X', $b), $bytes));
+        return implode($separator, array_map(fn($b) => sprintf('%02X', $b), $bytes));
     }
 
     /**
@@ -437,7 +437,7 @@ class ProtocolHelper
             'latitude' => $latValue,
             'longitude' => $lngValue,
             'altitude' => $altitude,
-            'speed' => $speed / 10.0, // Convert to km/h
+            'speed' => $speed / 10.0,
             'direction' => $direction,
             'time' => $time,
             'accOn' => $accOn,

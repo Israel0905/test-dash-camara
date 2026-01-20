@@ -288,6 +288,7 @@ class TcpServer
         ];
 
         // Generate simple ASCII auth code as requested
+        // Using terminal ID as auth code (Variation B)
         $authCode = "000000992002";
         $this->devices[$phoneNumber]['authCode'] = $authCode;
 
@@ -609,7 +610,7 @@ class TcpServer
     /**
      * Send response to connection
      */
-    private function sendResponse(string $connectionId, array $response): void
+    /* private function sendResponse(string $connectionId, array $response): void
     {
         if (! isset($this->connections[$connectionId])) {
             return;
@@ -620,6 +621,27 @@ class TcpServer
         $this->log("Sending: {$hexResponse}");
 
         $connection->write(pack('C*', ...$response));
+    }*/
+
+    private function sendResponse(string $connectionId, array $response): void
+    {
+        if (! isset($this->connections[$connectionId])) {
+            return;
+        }
+
+        $connection = $this->connections[$connectionId]['connection'];
+
+        // 1. Aplicamos el escapado usando el ProtocolHelper que me subiste
+        $escapedResponse = ProtocolHelper::escape($response);
+
+        // 2. IMPORTANTE: El protocolo exige que todo el paquete 
+        // vaya envuelto en 0x7E al inicio y al final.
+        $finalPayload = array_merge([0x7E], $escapedResponse, [0x7E]);
+
+        $hexResponse = ProtocolHelper::bytesToHexString($finalPayload);
+        $this->log("Sending: {$hexResponse}");
+
+        $connection->write(pack('C*', ...$finalPayload));
     }
 
     /**
