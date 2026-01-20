@@ -330,6 +330,7 @@ class TcpServer
             return;
         }
 
+        //verificar este authcode
         $authCode = implode('', array_map('chr', array_slice($body, 1, $authCodeLength)));
         $storedAuthCode = $this->devices[$phoneNumber]['authCode'] ?? null;
 

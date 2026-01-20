@@ -204,19 +204,17 @@ class MessageBuilder
         $body[] = $result & 0xFF;
 
         if ($result === 0) {
-            // IMPORTANTE: En muchos terminales 2019, si el resultado es 0, 
-            // esperan el código de autenticación inmediatamente.
-            // Pero si el MDVR te sigue ignorando, probaremos enviando el código 
-            // tal cual lo envió él en el cuerpo del registro.
-
             $authBytes = !empty($authCode) ? array_values(unpack('C*', $authCode)) : [];
+
+            // Byte 3: Longitud del código de autenticación (1 byte)
+            $body[] = count($authBytes);
+
+            // Byte 4+: Los bytes del código
             $body = array_merge($body, $authBytes);
         }
 
         return $this->buildMessageWithRawPhone(ProtocolHelper::MSG_REGISTRATION_RESPONSE, $body, $phoneRawBytes);
     }
-
-
     /**
      * Build Query Resources Request (0x9205)
      */
