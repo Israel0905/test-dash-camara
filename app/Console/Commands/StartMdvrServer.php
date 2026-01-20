@@ -180,36 +180,46 @@ class StartMdvrServer extends Command
     private function buildAndSend($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        $properties = (1 << 14) | $bodyLen; // Bit 14 para modo 2019
+        $properties = (1 << 14) | $bodyLen; // Bit 14 = Protocolo 2019
 
+        // 1. HEADER BASE
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,
+            $msgId & 0xFF,   // Msg ID
             ($properties >> 8) & 0xFF,
-            $properties & 0xFF,
-            0x01, // Protocol Version
+            $properties & 0xFF, // Attr
+            0x01, // Protocol Version (Obligatorio en 2019)
         ];
 
-        // Usamos el teléfono tal cual lo mandó el equipo (Asumimos 6 bytes del log)
+        // 2. TELÉFONO (BCD[10]) - EL PUNTO CLAVE
+        // El manual 2019 exige 10 bytes. Si el phoneRaw tiene 6, 
+        // hay que rellenar con 4 ceros a la IZQUIERDA.
+        $targetPhoneLen = 10;
+        $currentPhoneLen = count($phoneRaw);
+        $paddingNeeded = $targetPhoneLen - $currentPhoneLen;
+
+        for ($i = 0; $i < $paddingNeeded; $i++) {
+            $header[] = 0x00;
+        }
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
+        // 3. SERIAL DEL MENSAJE (SERVER)
         static $serverSerial = 1;
         $header[] = ($serverSerial >> 8) & 0xFF;
         $header[] = $serverSerial & 0xFF;
         $serverSerial++;
 
+        // 4. UNIR TODO Y CALCULAR CHECKSUM
         $full = array_merge($header, $body);
-
-        // Checksum
         $checksum = 0;
         foreach ($full as $b) {
             $checksum ^= $b;
         }
         $full[] = $checksum;
 
-        // Escape Processing
+        // 5. ESCAPE
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
@@ -227,7 +237,7 @@ class StartMdvrServer extends Command
         $binary = pack('C*', ...$final);
         socket_write($socket, $binary, strlen($binary));
 
-        $this->info("<fg=cyan>[SEND]</> 0x" . sprintf('%04X', $msgId) . ": " . $this->bytesToHex($final));
+        $this->info("<fg=cyan>[SEND ACTUALIZADO]</> 0x" . sprintf('%04X', $msgId) . ": " . $this->bytesToHex($final));
     }
 
     private function bytesToHex($bytes)
