@@ -92,15 +92,6 @@ class MessageBuilder
     }
 
     /**
-     * Build message header (17 bytes for JTT808-2019)
-     */
-    private function buildHeader(int $messageId, int $bodyLength, string $phoneNumber, ?int $serialNumber): array
-    {
-        $phoneBcd = ProtocolHelper::phoneNumberToBcd($phoneNumber, 10);
-        return $this->buildHeaderWithRawPhone($messageId, $bodyLength, $phoneBcd, $serialNumber);
-    }
-
-    /**
      * Build message header using raw phone bytes (JTT808-2019: 17+ bytes total)
      * Format: MsgID(2) + Props(2) + Version(1) + Phone(10) + Serial(2)
      */
@@ -112,35 +103,25 @@ class MessageBuilder
             $messageId & 0xFF,
         ];
 
-        // Properties (2 bytes)
-        // Bit 0-9: body length. Bit 14: version flag = 1 (JTT808-2019)
-        $properties = ($bodyLength & 0x03FF) | (1 << 14);
+        // Propiedades (2 bytes)
+        // Bit 14: Siempre 1 para versión 2019
+        // Bits 0-9: Longitud real del cuerpo
+        $properties = 0x4000 | ($bodyLength & 0x03FF);
+
         $header[] = ($properties >> 8) & 0xFF;
         $header[] = $properties & 0xFF;
 
-        // Protocol version (1 byte) - Required for 2019
-        $header[] = 0x01; // Version 1
+        // Protocol version (1 byte)
+        $header[] = 0x01;
 
-        // Phone number (EXACTLY 10 bytes)
-        // Ensure 10 bytes with padding if needed
-        $phone10Bytes = $phoneRawBytes;
-        if (count($phoneRawBytes) > 10) {
-            $phone10Bytes = array_slice($phoneRawBytes, -10);
-        } elseif (count($phoneRawBytes) < 10) {
-            // Pad with zeros at the beginning
-            $phone10Bytes = array_merge(array_fill(0, 10 - count($phoneRawBytes), 0x00), $phoneRawBytes);
-        }
-
-        $hexPhone = ProtocolHelper::bytesToHexString($phone10Bytes);
-
+        // Forzar 10 bytes de teléfono (BCD)
+        $phone10Bytes = array_pad(array_slice($phoneRawBytes, -10), -10, 0x00);
         $header = array_merge($header, $phone10Bytes);
 
-        // Serial number (2 bytes)
+        // Serial del servidor (2 bytes)
         $serial = $serialNumber ?? $this->getNextSerialNumber();
         $header[] = ($serial >> 8) & 0xFF;
         $header[] = $serial & 0xFF;
-
-        echo "[DEBUG] Header Built (v2019) -> Phone: {$hexPhone}, Server Serial: " . sprintf('%04X', $serial) . PHP_EOL;
 
         return $header;
     }
