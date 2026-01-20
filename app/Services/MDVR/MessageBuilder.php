@@ -163,24 +163,26 @@ class MessageBuilder
 
     public function buildRegistrationResponseWithRawPhone(array $phoneRawBytes, int $replySerial, int $result, string $authCode = ''): array
     {
-        // 1. Construir el Cuerpo (BODY)
-        $body = [
-            ($replySerial >> 8) & 0xFF, // WORD: Serial del mensaje del equipo
-            $replySerial & 0xFF,
-            $result & 0xFF,             // BYTE: 0 para éxito
-        ];
+        $body = [];
 
+        // 1. Reply Serial (WORD - 2 bytes)
+        $body[] = ($replySerial >> 8) & 0xFF;
+        $body[] = $replySerial & 0xFF;
+
+        // 2. Result Code (BYTE - 1 byte)
+        $body[] = $result & 0xFF;
+
+        // 3. Auth Code (Solo si es éxito)
         if ($result === 0) {
             $authBytes = array_values(unpack('C*', $authCode));
-            $body[] = count($authBytes); // BYTE: Longitud exacta (Ej: 12 -> 0x0C)
+            // IMPORTANTE: El siguiente byte DEBE ser la longitud, sin nada en medio
+            $body[] = count($authBytes);
             $body = array_merge($body, $authBytes);
         }
 
-        // 2. Construir el mensaje completo
-        // Asegúrate de que buildMessageWithRawPhone use count($body) para el header
+        // El total de $body debe ser 16 bytes para un código de 12 caracteres
         return $this->buildMessageWithRawPhone(0x8100, $body, $phoneRawBytes);
     }
-
 
     /**
      * Build Query Resources Request (0x9205)

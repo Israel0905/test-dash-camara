@@ -355,6 +355,14 @@ class TcpServer
 
         // Send success response
         $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 0);
+
+        // --- SUCCESS DEBUG LOGGING ---
+        echo PHP_EOL;
+        echo "✅✅✅ AUTHENTICATION SUCCESSFUL for {$phoneNumber} ✅✅✅" . PHP_EOL;
+        echo "✅ Device is now ONLINE and READY to transmit data." . PHP_EOL;
+        echo "✅ IMEI: " . ($this->devices[$phoneNumber]['imei'] ?? 'Unknown') . PHP_EOL;
+        echo PHP_EOL;
+
         $this->log("Authentication successful for {$phoneNumber}");
     }
 
