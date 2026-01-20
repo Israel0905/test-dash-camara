@@ -272,19 +272,19 @@ class TcpServer
         // Use Phone Number (992002) with Padding 00 format
         $authCode = $phoneNumber;
 
-        // STRATEGY: Send Result=1 (Vehicle already registered) to break the loop
-        // When result != 0, no auth code is sent. Body is just 3 bytes.
-        $this->devices[$phoneNumber]['authCode'] = '';
+        // Use Length Prefix + 123456 (Byte 3 = 0x06 length, not 0x00 padding)
+        $authCode = '123456';
+        $this->devices[$phoneNumber]['authCode'] = $authCode;
 
         $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
             $header['phoneNumberRaw'],
             $header['serialNumber'],
-            1, // Result: 1 = Vehicle already registered
-            '' // No auth code for non-zero result
+            0, // Result: 0 = Success
+            $authCode
         );
         $this->sendResponse($connectionId, $response);
 
-        $this->log('Registration response sent - Result=1 (Already Registered) to break loop');
+        $this->log("Registration successful - Auth code: {$authCode} (with length prefix 0x06)");
     }
 
     /**
