@@ -162,7 +162,7 @@ class StartMdvrServer extends Command
         $this->line('   Plate: '.($plate ?: '(vacío)'));
 
         // =====================================================
-        // CONSTRUIR RESPUESTA 0x8100 (ULV Tablas 3.3.2 + 3.4)
+        // CONSTRUIR RESPUESTA 0x8100 (Estructura Compacta)
         // =====================================================
         // Usamos el ID COMPLETO del Terminal (12 dígitos)
         $authCode = '000000992002';  // ID completo, no solo los últimos 6 dígitos
@@ -170,29 +170,25 @@ class StartMdvrServer extends Command
         $this->info('   ─────────────────────────────────────────────────');
         $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
 
-        // ESTRUCTURA DEFINITIVA (17 bytes total):
-        // ┌────────┬────────┬────────┬────────┬────────┬───────────────────────────┐
-        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3 │ Byte 4 │ Byte 5+                   │
-        // ├────────┼────────┼────────┼────────┼────────┼───────────────────────────┤
-        // │ Serial │ Serial │ Result │RELLENO │ Length │ Auth Code (ID COMPLETO)   │
-        // │  High  │  Low   │  (00)  │  (00)  │  (0C)  │ "000000992002"            │
-        // └────────┴────────┴────────┴────────┴────────┴───────────────────────────┘
+        // ESTRUCTURA COMPACTA (15 bytes total):
+        // ┌────────┬────────┬────────┬─────────────────────────────────────────┐
+        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3+                                 │
+        // ├────────┼────────┼────────┼─────────────────────────────────────────┤
+        // │ Serial │ Serial │ Result │ Auth Code (ID COMPLETO DIRECTO)         │
+        // │  High  │  Low   │  (00)  │ "000000992002" (30 30 30...)            │
+        // └────────┴────────┴────────┴─────────────────────────────────────────┘
         //
-        // Tabla 3.3.2: "Authentication code" empieza en Byte 4
-        // Tabla 3.4: Auth code = Length (1 byte) + Content (string)
-        // Byte 3 = RELLENO (0x00) - El hueco del manual entre byte 2 y 4
-        // Byte 4 = Length (0x0C = 12) - Inicio de estructura Tabla 3.4
-        // Byte 5+ = Content (ID completo)
+        // SIN relleno, SIN byte de longitud
+        // El código se pega directamente al resultado
+        // (El manual tiene error de imprenta en "Start Byte 4")
 
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
             0x00,                        // Byte 2: Result = Éxito
-            0x00,                        // Byte 3: RELLENO (el hueco del manual)
-            strlen($authCode),           // Byte 4: Length (0x0C = 12)
         ];
 
-        // Byte 5+: Auth Code Content (ID COMPLETO) como bytes ASCII
+        // Byte 3+: Auth Code (ID COMPLETO) DIRECTO como bytes ASCII
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
