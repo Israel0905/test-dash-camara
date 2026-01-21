@@ -63,7 +63,7 @@ class StartMdvrServer extends Command
         $bytes = array_values(unpack('C*', $input));
 
         // --- 1. DESESCAPADO / UNESCAPE (Manual Sección 3.2.1) ---
-        // El protocolo usa 0x7E como marca de inicio y fin. 
+        // El protocolo usa 0x7E como marca de inicio y fin.
         // Si los datos contienen 0x7E, el terminal envía 0x7D 0x02.
         // Si los datos contienen 0x7D, el terminal envía 0x7D 0x01.
         // Aquí restauramos esos valores a su estado original.
@@ -93,21 +93,21 @@ class StartMdvrServer extends Command
         // --- 2. EXTRACCIÓN DEL HEADER (Manual Sección 3.3 / Tabla 2.2.2) ---
         // [Bytes 0-1]: Message ID. Identifica la función (ej: 0x0100 es Registro de Terminal).
         $msgId = ($payload[0] << 8) | $payload[1];
-        
+
         // [Bytes 2-3]: Message Body Attributes. El Bit 14 indica si es Protocolo 2019 (1=Sí).
         $attr = ($payload[2] << 8) | $payload[3];
         $is2019 = ($attr >> 14) & 0x01;
 
         // [Byte 4]: Protocol Version. En el estándar 2019, este valor debe ser 0x01.
         $protocolVer = $payload[4];
-        
+
         // [Bytes 5-14]: Terminal ID (Phone). Son 10 bytes en formato BCD (20 dígitos).
         // Es el identificador único que usaremos para responderle al equipo.
         $phone = bin2hex(pack('C*', ...array_slice($payload, 5, 10)));
-        
+
         // [Bytes 15-16]: Message Sequence Number (Serial). Es el contador de mensajes del terminal.
         $devSerial = ($payload[15] << 8) | $payload[16];
-        
+
         // --- 3. EXTRACCIÓN DEL BODY ---
         // [Byte 17 en adelante]: Aquí comienza la información específica del mensaje.
         $body = array_slice($payload, 17);
@@ -228,9 +228,9 @@ class StartMdvrServer extends Command
         // SOLICITUD DE VIDEO REAL (0x9101) - JTT1078
         // =====================================================
         // Indica al dispositivo que empiece a enviar video.
-        
-        $serverIp = '0.0.0.0'; // El dispositivo usará la IP desde donde recibe el comando si es 0
-        $videoPort = 8809;     // Puerto donde escucharemos el video (TCP)
+
+        $serverIp = '192.168.1.104'; // IP Local detectada automatically
+        $videoPort = 8810;     // Puerto donde escucharemos el video (TCP)
         $udpPort = 0;          // 0 = Usar TCP
         $channel = 1;          // Canal 1 (Cámara 1)
         $dataType = 0;         // 0 = AV, 1 = Video, 2 = Audio, 3 = Talk
@@ -241,7 +241,7 @@ class StartMdvrServer extends Command
         $body = [
             $ipLength,
         ];
-        
+
         foreach (str_split($serverIp) as $char) {
             $body[] = ord($char);
         }
