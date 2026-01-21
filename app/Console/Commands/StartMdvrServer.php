@@ -184,12 +184,4 @@ class StartMdvrServer extends Command
 
         @socket_write($socket, pack('C*', ...$final));
     }
-
-    private function parseLocation($body)
-    {
-        if (count($body) < 28) return;
-        $lat = (($body[8] << 24) | ($body[9] << 16) | ($body[10] << 8) | $body[11]) / 1000000;
-        $lon = (($body[12] << 24) | ($body[13] << 16) | ($body[14] << 8) | $body[15]) / 1000000;
-        $this->warn("   [Ubicación] $lat, $lon");
-    }
 }
