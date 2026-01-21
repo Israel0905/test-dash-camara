@@ -164,31 +164,31 @@ class StartMdvrServer extends Command
         // =====================================================
         // CONSTRUIR RESPUESTA 0x8100 (ULV Tabla 3.3.2)
         // =====================================================
-        // Usamos solo "992002" como código (los últimos 6 dígitos del Terminal ID)
-        $authCode = '992002';
+        // Usamos el ID COMPLETO del Terminal (12 dígitos)
+        $authCode = '000000992002';  // ID completo, no solo los últimos 6 dígitos
 
         $this->info('   ─────────────────────────────────────────────────');
         $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
 
-        // ESTRUCTURA FINAL (9 bytes total):
-        // ┌────────┬────────┬────────┬─────────────────────────────────┐
-        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3+                         │
-        // ├────────┼────────┼────────┼─────────────────────────────────┤
-        // │ Serial │ Serial │ Result │ Auth Code (STRING DIRECTO)      │
-        // │  High  │  Low   │  (00)  │ "992002" (39 39 32 30 30 32)    │
-        // └────────┴────────┴────────┴─────────────────────────────────┘
+        // ESTRUCTURA DEFINITIVA (16 bytes total):
+        // ┌────────┬────────┬────────┬────────┬───────────────────────────────┐
+        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3 │ Byte 4+                       │
+        // ├────────┼────────┼────────┼────────┼───────────────────────────────┤
+        // │ Serial │ Serial │ Result │ Length │ Auth Code (ID COMPLETO)       │
+        // │  High  │  Low   │  (00)  │  (0C)  │ "000000992002" (30 30...)     │
+        // └────────┴────────┴────────┴────────┴───────────────────────────────┘
         //
-        // El código empieza DIRECTAMENTE en Byte 3.
-        // Sin relleno, sin byte de longitud.
-        // (El manual tiene un error tipográfico, dice "Start byte 4" pero debería ser 3)
+        // Byte 3 = Length (0x0C = 12 decimal)
+        // Byte 4+ = String empieza exactamente en byte 4
 
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
             0x00,                        // Byte 2: Result = Éxito
+            strlen($authCode),           // Byte 3: Length (0x0C = 12)
         ];
 
-        // Byte 3+: Auth Code DIRECTO como bytes ASCII
+        // Byte 4+: Auth Code (ID COMPLETO) como bytes ASCII
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
