@@ -113,42 +113,40 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        // Bit 14 activo para 2019 + Longitud
+        // Bit 14 = 1 (Protocolo 2019), Bits 0-9 = Longitud
         $attr = 0x4000 | $bodyLen;
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,
+            $msgId & 0xFF, // Message ID (2 bytes)
             ($attr >> 8) & 0xFF,
-            ($attr & 0xFF),
-            0x01, // Versión 2019
+            $attr & 0xFF,   // Message Attr (2 bytes)
+            0x01,                                // Protocol Version (1 byte - 2019)
         ];
 
-        // Relleno de teléfono: 20 bytes EXACTOS
-        // Si phoneRaw tiene 10 bytes, agregamos 10 ceros a la IZQUIERDA
-        $padCount = 20 - count($phoneRaw);
-        for ($i = 0; $i < $padCount; $i++) {
-            $header[] = 0x00;
-        }
-        foreach ($phoneRaw as $b) {
+        // --- REGLA DEL MANUAL: TERMINAL ID DEBE SER 20 BYTES ---
+        // Tu phoneRaw tiene 10 bytes: [00 00 00 00 00 00 00 99 20 02]
+        // Tenemos que rellenar con ceros a la IZQUIERDA hasta completar 20.
+        $terminalId = array_pad($phoneRaw, -20, 0x00);
+        foreach ($terminalId as $b) {
             $header[] = $b;
         }
 
         static $srvSerial = 1;
-        $header[] = ($srvSerial >> 8) & 0xFF;
+        $header[] = ($srvSerial >> 8) & 0xFF; // Message Serial (2 bytes)
         $header[] = $srvSerial & 0xFF;
         $srvSerial = ($srvSerial + 1) % 65535;
 
         $full = array_merge($header, $body);
 
-        // Checksum XOR
+        // Checksum (XOR de todos los bytes del header y body)
         $cs = 0;
         foreach ($full as $b) {
             $cs ^= $b;
         }
         $full[] = $cs;
 
-        // Escapado
+        // Escapado (0x7E -> 0x7D 0x02, 0x7D -> 0x7D 0x01)
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
