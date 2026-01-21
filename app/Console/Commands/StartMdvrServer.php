@@ -127,12 +127,13 @@ class StartMdvrServer extends Command
 
     private function respondGeneral($socket, $phoneRaw, $terminalSerial, $replyId)
     {
+        // Tabla 3.1.2: Serial(2) + MsgID(2) + Result(1)
         $body = [
             ($terminalSerial >> 8) & 0xFF,
             $terminalSerial & 0xFF,
             ($replyId >> 8) & 0xFF,
             $replyId & 0xFF,
-            0x00
+            0x00 // Éxito
         ];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
