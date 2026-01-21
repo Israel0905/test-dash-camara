@@ -170,19 +170,25 @@ class StartMdvrServer extends Command
         $this->info('   ─────────────────────────────────────────────────');
         $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
 
-        // ESTRUCTURA ULV Tabla 3.3.2 (10 bytes total):
-        // Byte 0-1: Reply Serial Number (WORD)
-        // Byte 2:   Result (BYTE) - 0 = Éxito
-        // Byte 3:   RELLENO (0x00) - Para alinear al Byte 4
-        // Byte 4+:  Auth Code (STRING CRUDO, SIN byte de longitud)
+        // ESTRUCTURA FINAL ULV Tabla 3.3.2 (10 bytes total):
+        // ┌────────┬────────┬────────┬────────┬─────────────────────────┐
+        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3 │ Byte 4+                 │
+        // ├────────┼────────┼────────┼────────┼─────────────────────────┤
+        // │ Serial │ Serial │ Result │ Length │ Auth Code (STRING)      │
+        // │  High  │  Low   │  (00)  │  (06)  │ "992002" (39 39...)     │
+        // └────────┴────────┴────────┴────────┴─────────────────────────┘
+        //
+        // El Byte 3 contiene la LONGITUD del código (NO es relleno).
+        // Esto permite que el STRING empiece exactamente en el Byte 4.
+
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
             0x00,                        // Byte 2: Result = Éxito
-            0x00,                        // Byte 3: RELLENO (alinea al byte 4)
+            strlen($authCode),           // Byte 3: LENGTH (llena el hueco, NO padding)
         ];
 
-        // Byte 4+: Auth Code CRUDO como bytes ASCII (SIN longitud)
+        // Byte 4+: Auth Code como bytes ASCII
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
