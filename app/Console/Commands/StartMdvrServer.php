@@ -54,12 +54,19 @@ class StartMdvrServer extends Command
 
     private function processBuffer($socket, $input)
     {
+        // --- VISUALIZACIÓN DE TRAMA ---
+        // Convertimos los datos binarios a Hexadecimal para debug.
         $rawHex = strtoupper(bin2hex($input));
         $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
+        // Transformamos la cadena en un array de bytes (números) para procesarlos.
         $bytes = array_values(unpack('C*', $input));
 
-        // 1. UNESCAPE (Manual Cap 2.2.1)
+        // --- 1. DESESCAPADO / UNESCAPE (Manual Sección 3.2.1) ---
+        // El protocolo usa 0x7E como marca de inicio y fin. 
+        // Si los datos contienen 0x7E, el terminal envía 0x7D 0x02.
+        // Si los datos contienen 0x7D, el terminal envía 0x7D 0x01.
+        // Aquí restauramos esos valores a su estado original.
         $data = [];
         for ($i = 0; $i < count($bytes); $i++) {
             if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
@@ -75,23 +82,34 @@ class StartMdvrServer extends Command
             }
         }
 
+        // Validación: El mensaje debe tener al menos el Header completo y el Checksum.
         if (count($data) < 15) {
             return;
         }
 
-        // Payload sin delimitadores 7E ni checksum
+        // El Payload es el cuerpo útil: quitamos el primer 0x7E, el último 0x7E y el byte de Checksum.
         $payload = array_slice($data, 1, -2);
 
-        // 2. PARSE HEADER 2019 (Tabla 2.2.2)
+        // --- 2. EXTRACCIÓN DEL HEADER (Manual Sección 3.3 / Tabla 2.2.2) ---
+        // [Bytes 0-1]: Message ID. Identifica la función (ej: 0x0100 es Registro de Terminal).
         $msgId = ($payload[0] << 8) | $payload[1];
+        
+        // [Bytes 2-3]: Message Body Attributes. El Bit 14 indica si es Protocolo 2019 (1=Sí).
         $attr = ($payload[2] << 8) | $payload[3];
         $is2019 = ($attr >> 14) & 0x01;
 
-        // En 2019 el Protocol Version es el byte 4
+        // [Byte 4]: Protocol Version. En el estándar 2019, este valor debe ser 0x01.
         $protocolVer = $payload[4];
+        
+        // [Bytes 5-14]: Terminal ID (Phone). Son 10 bytes en formato BCD (20 dígitos).
+        // Es el identificador único que usaremos para responderle al equipo.
         $phone = bin2hex(pack('C*', ...array_slice($payload, 5, 10)));
-        // El Serial de la cámara está en bytes 15-16
+        
+        // [Bytes 15-16]: Message Sequence Number (Serial). Es el contador de mensajes del terminal.
         $devSerial = ($payload[15] << 8) | $payload[16];
+        
+        // --- 3. EXTRACCIÓN DEL BODY ---
+        // [Byte 17 en adelante]: Aquí comienza la información específica del mensaje.
         $body = array_slice($payload, 17);
 
         $this->info(sprintf(
@@ -102,18 +120,24 @@ class StartMdvrServer extends Command
             ($is2019 ? 'SI' : 'NO')
         ));
 
-        // 3. RESPUESTAS
+        // --- 4. SECCIÓN DE RESPUESTAS (Flujo de Conexión) ---
+        // Guardamos los 10 bytes del Phone para incluirlos en el encabezado de nuestra respuesta.
         $phoneRaw = array_slice($payload, 5, 10);
         $phoneHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
         $this->line("   Phone RAW (para respuesta): <fg=cyan>$phoneHex</>");
 
         if ($msgId === 0x0100) {
+            // Mensaje de Registro (Terminal Registration):
+            // Respondemos con 0x8100 y enviamos un "Authentication Code" en el Body.
             $this->comment('   -> Procesando Registro...');
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
         } else {
+            // Respuesta General (Platform Generic Response - 0x8001):
+            // Se usa para confirmar Autenticación (0x0102), Latidos (Heartbeat) o GPS.
             $this->comment('   -> Enviando Respuesta General (0x8001)...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
 
+            // Si el ID es 0x0200, el Body contiene datos de ubicación (Latitud, Longitud, etc.)
             if ($msgId === 0x0200) {
                 $this->parseLocation($body);
             }
