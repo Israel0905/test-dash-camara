@@ -222,6 +222,42 @@ class StartMdvrServer extends Command
         $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
     }
 
+    private function sendVideoRequest($socket, $phoneRaw)
+    {
+        // =====================================================
+        // SOLICITUD DE VIDEO REAL (0x9101) - JTT1078
+        // =====================================================
+        // Indica al dispositivo que empiece a enviar video.
+        
+        $serverIp = '0.0.0.0'; // El dispositivo usará la IP desde donde recibe el comando si es 0
+        $videoPort = 8809;     // Puerto donde escucharemos el video (TCP)
+        $udpPort = 0;          // 0 = Usar TCP
+        $channel = 1;          // Canal 1 (Cámara 1)
+        $dataType = 0;         // 0 = AV, 1 = Video, 2 = Audio, 3 = Talk
+        $streamType = 0;       // 0 = Main Stream, 1 = Sub Stream
+
+        $ipLength = strlen($serverIp);
+
+        $body = [
+            $ipLength,
+        ];
+        
+        foreach (str_split($serverIp) as $char) {
+            $body[] = ord($char);
+        }
+
+        $body[] = ($videoPort >> 8) & 0xFF; // Video Port TCP
+        $body[] = $videoPort & 0xFF;
+        $body[] = ($udpPort >> 8) & 0xFF;   // UDP Port (0)
+        $body[] = $udpPort & 0xFF;
+        $body[] = $channel;
+        $body[] = $dataType;
+        $body[] = $streamType;
+
+        $this->info("   -> Solicitando VIDEO (0x9101) al puerto $videoPort...");
+        $this->sendPacket($socket, 0x9101, $phoneRaw, $body);
+    }
+
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
@@ -313,5 +349,13 @@ class StartMdvrServer extends Command
 
         $this->comment('   -> Confirmando mensaje 0x'.sprintf('%04X', $replyMsgId));
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+
+        // --- TRIGGER AUTOMÁTICO DE VIDEO JTT1078 ---
+        // Si acabamos de confirmar la Autenticación (0x0102), pedimos el video inmediatamente.
+        if ($replyMsgId === 0x0102) {
+            $this->warn('   [AUTO] Autenticación exitosa. Iniciando solicitud de Video...');
+            sleep(1); // Pequeña pausa para asegurar que el dispositivo procesó el 0x8001
+            $this->sendVideoRequest($socket, $phoneRaw);
+        }
     }
 }
