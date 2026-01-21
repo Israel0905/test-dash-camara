@@ -7,6 +7,7 @@ use Illuminate\Console\Command;
 class StartMdvrServer extends Command
 {
     protected $signature = 'mdvr:start {--port=8808}';
+
     protected $description = 'Servidor JT/T 808 para Ultravision N6 - Debug Mode';
 
     public function handle()
@@ -16,15 +17,16 @@ class StartMdvrServer extends Command
         $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
 
-        if (!@socket_bind($socket, $address, $port)) {
+        if (! @socket_bind($socket, $address, $port)) {
             $this->error("Error: Puerto $port ocupado.");
+
             return;
         }
 
         socket_listen($socket);
-        $this->info("=====================================================");
+        $this->info('=====================================================');
         $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port");
-        $this->info("=====================================================");
+        $this->info('=====================================================');
 
         $clients = [$socket];
         while (true) {
@@ -34,7 +36,7 @@ class StartMdvrServer extends Command
                 foreach ($read as $s) {
                     if ($s === $socket) {
                         $clients[] = socket_accept($socket);
-                        $this->warn("[CONN] Cámara conectada.");
+                        $this->warn('[CONN] Cámara conectada.');
                     } else {
                         $input = @socket_read($s, 4096);
                         if ($input) {
@@ -42,7 +44,7 @@ class StartMdvrServer extends Command
                         } else {
                             socket_close($s);
                             unset($clients[array_search($s, $clients)]);
-                            $this->error("[DESC] Cámara desconectada.");
+                            $this->error('[DESC] Cámara desconectada.');
                         }
                     }
                 }
@@ -53,7 +55,7 @@ class StartMdvrServer extends Command
     private function processBuffer($socket, $input)
     {
         $rawHex = strtoupper(bin2hex($input));
-        $this->line("\n<fg=yellow>[RAW RECV]</>: " . implode(' ', str_split($rawHex, 2)));
+        $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
         $bytes = array_values(unpack('C*', $input));
 
@@ -73,14 +75,16 @@ class StartMdvrServer extends Command
             }
         }
 
-        if (count($data) < 15) return;
+        if (count($data) < 15) {
+            return;
+        }
 
         // Payload sin delimitadores 7E ni checksum
         $payload = array_slice($data, 1, -2);
 
         // 2. PARSE HEADER 2019 (Tabla 2.2.2)
         $msgId = ($payload[0] << 8) | $payload[1];
-        $attr  = ($payload[2] << 8) | $payload[3];
+        $attr = ($payload[2] << 8) | $payload[3];
         $is2019 = ($attr >> 14) & 0x01;
 
         // En 2019 el Protocol Version es el byte 4
@@ -91,7 +95,7 @@ class StartMdvrServer extends Command
         $body = array_slice($payload, 17);
 
         $this->info(sprintf(
-            "[INFO] ID: 0x%04X | Serial: %d | Phone: %s | Ver2019: %s",
+            '[INFO] ID: 0x%04X | Serial: %d | Phone: %s | Ver2019: %s',
             $msgId,
             $devSerial,
             $phone,
@@ -100,17 +104,19 @@ class StartMdvrServer extends Command
 
         // 3. RESPUESTAS
         $phoneRaw = array_slice($payload, 5, 10);
-        $phoneHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
+        $phoneHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
         $this->line("   Phone RAW (para respuesta): <fg=cyan>$phoneHex</>");
-        
+
         if ($msgId === 0x0100) {
-            $this->comment("   -> Procesando Registro...");
+            $this->comment('   -> Procesando Registro...');
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
         } else {
-            $this->comment("   -> Enviando Respuesta General (0x8001)...");
+            $this->comment('   -> Enviando Respuesta General (0x8001)...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
 
-            if ($msgId === 0x0200) $this->parseLocation($body);
+            if ($msgId === 0x0200) {
+                $this->parseLocation($body);
+            }
         }
     }
 
@@ -119,17 +125,17 @@ class StartMdvrServer extends Command
         // =====================================================
         // PARSEAR CUERPO DEL REGISTRO (Tabla 3.3.1 - 100 bytes)
         // =====================================================
-        $this->info("   ┌─────────────────────────────────────────────────┐");
-        $this->info("   │          DATOS DE REGISTRO 0x0100               │");
-        $this->info("   └─────────────────────────────────────────────────┘");
+        $this->info('   ┌─────────────────────────────────────────────────┐');
+        $this->info('   │          DATOS DE REGISTRO 0x0100               │');
+        $this->info('   └─────────────────────────────────────────────────┘');
 
         // Byte 0-1: Province ID (WORD)
         $provinceId = isset($body[0], $body[1]) ? ($body[0] << 8) | $body[1] : 0;
-        $this->line("   Province ID: " . $provinceId);
+        $this->line('   Province ID: '.$provinceId);
 
         // Byte 2-3: County ID (WORD)
         $countyId = isset($body[2], $body[3]) ? ($body[2] << 8) | $body[3] : 0;
-        $this->line("   County ID: " . $countyId);
+        $this->line('   County ID: '.$countyId);
 
         // Byte 4-14: Manufacturer ID (11 bytes ASCII)
         $manufacturerBytes = array_slice($body, 4, 11);
@@ -138,53 +144,51 @@ class StartMdvrServer extends Command
 
         // Byte 15-44: Terminal Model (30 bytes ASCII)
         $modelBytes = array_slice($body, 15, 30);
-        $model = trim(implode('', array_map('chr', array_filter($modelBytes, fn($b) => $b > 0))));
+        $model = trim(implode('', array_map('chr', array_filter($modelBytes, fn ($b) => $b > 0))));
         $this->line("   Model: <fg=cyan>$model</>");
 
         // Byte 45-74: Terminal ID (30 bytes ASCII)
         $terminalIdBytes = array_slice($body, 45, 30);
-        $terminalId = trim(implode('', array_map('chr', array_filter($terminalIdBytes, fn($b) => $b > 0))));
+        $terminalId = trim(implode('', array_map('chr', array_filter($terminalIdBytes, fn ($b) => $b > 0))));
         $this->line("   Terminal ID: <fg=yellow>$terminalId</>");
 
         // Byte 75: License Plate Color
         $plateColor = $body[75] ?? 0;
-        $this->line("   Plate Color: " . $plateColor);
+        $this->line('   Plate Color: '.$plateColor);
 
         // Byte 76+: License Plate (variable)
         $plateBytes = array_slice($body, 76);
-        $plate = trim(implode('', array_map('chr', array_filter($plateBytes, fn($b) => $b > 0))));
-        $this->line("   Plate: " . ($plate ?: "(vacío)"));
+        $plate = trim(implode('', array_map('chr', array_filter($plateBytes, fn ($b) => $b > 0))));
+        $this->line('   Plate: '.($plate ?: '(vacío)'));
 
         // =====================================================
         // CONSTRUIR RESPUESTA 0x8100 (ULV Tabla 3.3.2)
         // =====================================================
         // Usamos solo "992002" como código (los últimos 6 dígitos del Terminal ID)
-        $authCode = "992002";
-        
-        $this->info("   ─────────────────────────────────────────────────");
-        $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: " . strlen($authCode) . ")");
+        $authCode = '992002';
 
-        // ESTRUCTURA CORRECTA ULV Tabla 3.3.2:
+        $this->info('   ─────────────────────────────────────────────────');
+        $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
+
+        // ESTRUCTURA CORRECTA ULV Tablas 3.3.2 + 3.4:
         // Byte 0-1: Reply Serial Number (WORD)
         // Byte 2:   Result (BYTE) - 0 = Éxito
-        // Byte 3:   Padding (BYTE) - 0x00 (El "gap" del documento)
-        // Byte 4:   Length del Auth Code (BYTE)
-        // Byte 5+:  Auth Code (ASCII)
+        // Byte 3:   Length del Auth Code (BYTE) ← ¡NO es padding, es la longitud!
+        // Byte 4+:  Auth Code (ASCII String)
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
             0x00,                        // Byte 2: Result = Éxito
-            0x00,                        // Byte 3: PADDING (ULV gap)
-            strlen($authCode),           // Byte 4: Length del código
+            strlen($authCode),           // Byte 3: Length del código (NO padding!)
         ];
 
-        // Byte 5+: Auth Code como bytes ASCII
+        // Byte 4+: Auth Code como bytes ASCII
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
 
         // Mostrar hex del body para debug
-        $bodyHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $responseBody));
+        $bodyHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $responseBody));
         $this->line("   Body HEX: <fg=magenta>$bodyHex</>");
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
@@ -218,14 +222,14 @@ class StartMdvrServer extends Command
         // =====================================================
         // DEBUG: Mostrar Header y Body por separado
         // =====================================================
-        $headerHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $header));
-        $bodyHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $body));
-        
-        $this->info("   ┌─────────────────────────────────────────────────┐");
-        $this->info("   │          PAQUETE DE RESPUESTA 0x" . sprintf('%04X', $msgId) . "             │");
-        $this->info("   └─────────────────────────────────────────────────┘");
-        $this->line("   <fg=white>HEADER (" . count($header) . " bytes):</> <fg=blue>$headerHex</>");
-        $this->line("   <fg=white>BODY   (" . count($body) . " bytes):</> <fg=magenta>$bodyHex</>");
+        $headerHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $header));
+        $bodyHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $body));
+
+        $this->info('   ┌─────────────────────────────────────────────────┐');
+        $this->info('   │          PAQUETE DE RESPUESTA 0x'.sprintf('%04X', $msgId).'             │');
+        $this->info('   └─────────────────────────────────────────────────┘');
+        $this->line('   <fg=white>HEADER ('.count($header)." bytes):</> <fg=blue>$headerHex</>");
+        $this->line('   <fg=white>BODY   ('.count($body)." bytes):</> <fg=magenta>$bodyHex</>");
 
         // Unir todo para el Checksum
         $full = array_merge($header, $body);
@@ -236,8 +240,8 @@ class StartMdvrServer extends Command
             $cs ^= $byte;
         }
         $full[] = $cs;
-        
-        $this->line("   <fg=white>CHECKSUM:</> <fg=yellow>" . sprintf('%02X', $cs) . "</>");
+
+        $this->line('   <fg=white>CHECKSUM:</> <fg=yellow>'.sprintf('%02X', $cs).'</>');
 
         // --- ESCAPADO ---
         $final = [0x7E];
@@ -255,7 +259,7 @@ class StartMdvrServer extends Command
         $final[] = 0x7E;
 
         $hexOut = strtoupper(bin2hex(pack('C*', ...$final)));
-        $this->line("<fg=green>[SEND HEX]</>: " . implode(' ', str_split($hexOut, 2)));
+        $this->line('<fg=green>[SEND HEX]</>: '.implode(' ', str_split($hexOut, 2)));
 
         @socket_write($socket, pack('C*', ...$final));
     }
@@ -276,10 +280,10 @@ class StartMdvrServer extends Command
             $deviceSerial & 0xFF,        // Serial de la cámara (Low)
             ($replyMsgId >> 8) & 0xFF,   // ID del mensaje que confirmamos (High)
             $replyMsgId & 0xFF,          // ID del mensaje que confirmamos (Low)
-            0x00                         // Resultado: 0 (Éxito)
+            0x00,                         // Resultado: 0 (Éxito)
         ];
 
-        $this->comment("   -> Confirmando mensaje 0x" . sprintf('%04X', $replyMsgId));
+        $this->comment('   -> Confirmando mensaje 0x'.sprintf('%04X', $replyMsgId));
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
 }
