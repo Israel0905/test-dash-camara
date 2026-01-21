@@ -111,20 +111,25 @@ class StartMdvrServer extends Command
         }
     }
 
-    private function respondRegistration($socket, $phoneRaw, $devSerial)
+    private function respondRegistration($socket, $phoneRaw, $terminalSerial)
     {
+        // INTENTO A: Usar un Auth Code que termine en 0x00 (Null Terminator)
+        // A veces el equipo lo lee como string de C y si no hay nulo, se sigue de largo.
         $authCode = "123456";
 
-        // Cuerpo 0x8100 (Tabla 3.3.2): Reply Serial(2) + Result(1) + Auth Code
         $body = [
-            ($devSerial >> 8) & 0xFF,
-            $devSerial & 0xFF,
-            0x00, // Éxito
+            ($terminalSerial >> 8) & 0xFF,
+            $terminalSerial & 0xFF,
+            0x00, // Resultado: Éxito
         ];
 
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
+
+        // Agregamos un byte NULO al final por si el MDVR espera terminación de cadena
+        // Esto cambiará la longitud del cuerpo de 9 a 10.
+        $body[] = 0x00;
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
@@ -132,39 +137,32 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-
-        // Atributos: Bit 14 ACTIVADO (0x4000) para indicar 2019
-        $attr = 0x4000 | $bodyLen;
+        $attr = (1 << 14) | $bodyLen;
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF, // ID Mensaje
-            ($attr >> 8) & 0xFF,
-            ($attr & 0xFF), // Atributos con Bit 14
-            0x01,                                // Versión 2019 (Obligatorio)
+            $msgId & 0xFF,
+            ($properties >> 8) & 0xFF,
+            ($properties & 0xFF), // Aquí hay un error de variable en tu código anterior, asegúrate que sea $attr
+            0x01,
         ];
-
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
-        // Serial del Servidor (Independiente)
-        static $srvSerial = 1;
-        $header[] = ($srvSerial >> 8) & 0xFF;
-        $header[] = $srvSerial & 0xFF;
-        $srvSerial = ($srvSerial + 1) % 65535;
+        // TRUCO: Usamos el mismo serial que el terminal para el header del servidor
+        // Solo para probar si el firmware del N6 tiene ese bloqueo.
+        // Si no tienes acceso a la variable $terminalSerial aquí, pásala por parámetro.
+        $header[] = ($terminalSerial >> 8) & 0xFF;
+        $header[] = $terminalSerial & 0xFF;
 
-        // Unir todo para el Checksum
         $full = array_merge($header, $body);
-
-        // --- CÁLCULO XOR REAL ---
         $cs = 0;
-        foreach ($full as $byte) {
-            $cs ^= $byte;
+        foreach ($full as $b) {
+            $cs ^= $b;
         }
         $full[] = $cs;
 
-        // --- ESCAPADO ---
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
@@ -179,9 +177,7 @@ class StartMdvrServer extends Command
         }
         $final[] = 0x7E;
 
-        $hexOut = strtoupper(bin2hex(pack('C*', ...$final)));
-        $this->line("<fg=green>[SEND HEX]</>: " . implode(' ', str_split($hexOut, 2)));
-
-        @socket_write($socket, pack('C*', ...$final));
+        socket_write($socket, pack('C*', ...$final));
+        $this->info("[SEND] 0x" . sprintf('%04X', $msgId) . ": " . implode(' ', array_map(fn($b) => sprintf('%02X', $b), $final)));
     }
 }
