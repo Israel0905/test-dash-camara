@@ -184,4 +184,27 @@ class StartMdvrServer extends Command
 
         @socket_write($socket, pack('C*', ...$final));
     }
+
+    /**
+     * Respuesta General del Servidor (Plataforma) -> Terminal
+     * ID Mensaje: 0x8001
+     */
+    private function respondGeneral($socket, $phoneRaw, $deviceSerial, $replyMsgId)
+    {
+        // Estructura del Cuerpo (Tabla 3.1.2):
+        // 1. Reply Serial Number (WORD): El serial del mensaje que mandó la cámara
+        // 2. Reply Message ID (WORD): El ID del mensaje que mandó la cámara (ej: 0x0102, 0x0002)
+        // 3. Result (BYTE): 0 = Éxito/Confirmado, 1 = Fallo, 2 = Mensaje Erróneo...
+
+        $body = [
+            ($deviceSerial >> 8) & 0xFF, // Serial de la cámara (High)
+            $deviceSerial & 0xFF,        // Serial de la cámara (Low)
+            ($replyMsgId >> 8) & 0xFF,   // ID del mensaje que confirmamos (High)
+            $replyMsgId & 0xFF,          // ID del mensaje que confirmamos (Low)
+            0x00                         // Resultado: 0 (Éxito)
+        ];
+
+        $this->comment("   -> Confirmando mensaje 0x" . sprintf('%04X', $replyMsgId));
+        $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+    }
 }
