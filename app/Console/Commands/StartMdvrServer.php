@@ -100,9 +100,12 @@ class StartMdvrServer extends Command
 
         // 3. RESPUESTAS
         $phoneRaw = array_slice($payload, 5, 10);
+        $phoneHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
+        $this->line("   Phone RAW (para respuesta): <fg=cyan>$phoneHex</>");
+        
         if ($msgId === 0x0100) {
             $this->comment("   -> Procesando Registro...");
-            $this->respondRegistration($socket, $phoneRaw, $devSerial);
+            $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
         } else {
             $this->comment("   -> Enviando Respuesta General (0x8001)...");
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
@@ -111,22 +114,80 @@ class StartMdvrServer extends Command
         }
     }
 
-    private function respondRegistration($socket, $phoneRaw, $devSerial)
+    private function respondRegistration($socket, $phoneRaw, $devSerial, $body)
     {
-        $authCode = "123456";
+        // =====================================================
+        // PARSEAR CUERPO DEL REGISTRO (Tabla 3.3.1 - 100 bytes)
+        // =====================================================
+        $this->info("   ┌─────────────────────────────────────────────────┐");
+        $this->info("   │          DATOS DE REGISTRO 0x0100               │");
+        $this->info("   └─────────────────────────────────────────────────┘");
 
-        // Cuerpo 0x8100 (Tabla 3.3.2): Reply Serial(2) + Result(1) + Auth Code
-        $body = [
-            ($devSerial >> 8) & 0xFF,
-            $devSerial & 0xFF,
-            0x00, // Éxito
+        // Byte 0-1: Province ID (WORD)
+        $provinceId = isset($body[0], $body[1]) ? ($body[0] << 8) | $body[1] : 0;
+        $this->line("   Province ID: " . $provinceId);
+
+        // Byte 2-3: County ID (WORD)
+        $countyId = isset($body[2], $body[3]) ? ($body[2] << 8) | $body[3] : 0;
+        $this->line("   County ID: " . $countyId);
+
+        // Byte 4-14: Manufacturer ID (11 bytes ASCII)
+        $manufacturerBytes = array_slice($body, 4, 11);
+        $manufacturer = trim(implode('', array_map('chr', $manufacturerBytes)));
+        $this->line("   Manufacturer: <fg=cyan>$manufacturer</>");
+
+        // Byte 15-44: Terminal Model (30 bytes ASCII)
+        $modelBytes = array_slice($body, 15, 30);
+        $model = trim(implode('', array_map('chr', array_filter($modelBytes, fn($b) => $b > 0))));
+        $this->line("   Model: <fg=cyan>$model</>");
+
+        // Byte 45-74: Terminal ID (30 bytes ASCII)
+        $terminalIdBytes = array_slice($body, 45, 30);
+        $terminalId = trim(implode('', array_map('chr', array_filter($terminalIdBytes, fn($b) => $b > 0))));
+        $this->line("   Terminal ID: <fg=yellow>$terminalId</>");
+
+        // Byte 75: License Plate Color
+        $plateColor = $body[75] ?? 0;
+        $this->line("   Plate Color: " . $plateColor);
+
+        // Byte 76+: License Plate (variable)
+        $plateBytes = array_slice($body, 76);
+        $plate = trim(implode('', array_map('chr', array_filter($plateBytes, fn($b) => $b > 0))));
+        $this->line("   Plate: " . ($plate ?: "(vacío)"));
+
+        // =====================================================
+        // CONSTRUIR RESPUESTA 0x8100 (ULV Tabla 3.3.2)
+        // =====================================================
+        // Usamos solo "992002" como código (los últimos 6 dígitos del Terminal ID)
+        $authCode = "992002";
+        
+        $this->info("   ─────────────────────────────────────────────────");
+        $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: " . strlen($authCode) . ")");
+
+        // ESTRUCTURA CORRECTA ULV Tabla 3.3.2:
+        // Byte 0-1: Reply Serial Number (WORD)
+        // Byte 2:   Result (BYTE) - 0 = Éxito
+        // Byte 3:   Padding (BYTE) - 0x00 (El "gap" del documento)
+        // Byte 4:   Length del Auth Code (BYTE)
+        // Byte 5+:  Auth Code (ASCII)
+        $responseBody = [
+            ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
+            $devSerial & 0xFF,          // Byte 1: Reply Serial Low
+            0x00,                        // Byte 2: Result = Éxito
+            0x00,                        // Byte 3: PADDING (ULV gap)
+            strlen($authCode),           // Byte 4: Length del código
         ];
 
+        // Byte 5+: Auth Code como bytes ASCII
         foreach (str_split($authCode) as $char) {
-            $body[] = ord($char);
+            $responseBody[] = ord($char);
         }
 
-        $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
+        // Mostrar hex del body para debug
+        $bodyHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $responseBody));
+        $this->line("   Body HEX: <fg=magenta>$bodyHex</>");
+
+        $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
     }
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
@@ -154,6 +215,18 @@ class StartMdvrServer extends Command
         $header[] = $srvSerial & 0xFF;
         $srvSerial = ($srvSerial + 1) % 65535;
 
+        // =====================================================
+        // DEBUG: Mostrar Header y Body por separado
+        // =====================================================
+        $headerHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $header));
+        $bodyHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $body));
+        
+        $this->info("   ┌─────────────────────────────────────────────────┐");
+        $this->info("   │          PAQUETE DE RESPUESTA 0x" . sprintf('%04X', $msgId) . "             │");
+        $this->info("   └─────────────────────────────────────────────────┘");
+        $this->line("   <fg=white>HEADER (" . count($header) . " bytes):</> <fg=blue>$headerHex</>");
+        $this->line("   <fg=white>BODY   (" . count($body) . " bytes):</> <fg=magenta>$bodyHex</>");
+
         // Unir todo para el Checksum
         $full = array_merge($header, $body);
 
@@ -163,6 +236,8 @@ class StartMdvrServer extends Command
             $cs ^= $byte;
         }
         $full[] = $cs;
+        
+        $this->line("   <fg=white>CHECKSUM:</> <fg=yellow>" . sprintf('%02X', $cs) . "</>");
 
         // --- ESCAPADO ---
         $final = [0x7E];
