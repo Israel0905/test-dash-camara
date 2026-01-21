@@ -168,30 +168,25 @@ class StartMdvrServer extends Command
         $authCode = '123456';  // Contraseña de sesión
 
         $this->info('   ─────────────────────────────────────────────────');
-        $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
-
-        // ESTRUCTURA CORREGIDA SEGÚN Tabla 3.1.2 (Respuesta General) - 11 bytes total:
-        // ┌────────┬────────┬────────┬────────┬────────┬───────────────────────────┐
-        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3 │ Byte 4 │ Byte 5+                   │
-        // ├────────┼────────┼────────┼────────┼────────┼───────────────────────────┤
-        // │ Serial │ Serial │ReplyID │ReplyID │ Result │ Auth Code (sin length)   │
-        // │  High  │  Low   │  (01)  │  (00)  │  (00)  │ "123456"                  │
-        // └────────┴────────┴────────┴────────┴────────┴───────────────────────────┘
+        // ESTRUCTURA ESTÁNDAR JTT808 (9 bytes total):
+        // ┌────────┬────────┬────────┬───────────────────────────┐
+        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3+                   │
+        // ├────────┼────────┼────────┼───────────────────────────┤
+        // │ Serial │ Serial │ Result │ Auth Code (STRING)        │
+        // │  High  │  Low   │  (00)  │ "123456"                  │
+        // └────────┴────────┴────────┴───────────────────────────┘
         //
         // Byte 0-1: Reply Serial Number (copia del recibido)
-        // Byte 2-3: Reply ID (0x0100) - Indica que respondemos al mensaje de Registro
-        // Byte 4:   Result (0x00 = Éxito) - El dispositivo LEE el resultado en Byte 4
-        // Byte 5+:  Auth Code (STRING) - Sin byte de longitud, solo caracteres ASCII
+        // Byte 2:   Result (0x00 = Éxito)
+        // Byte 3+:  Auth Code (STRING) - Sin byte de longitud
 
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
-            0x01,                        // Byte 2: Reply ID High (0x0100)
-            0x00,                        // Byte 3: Reply ID Low
-            0x00,                        // Byte 4: Result = Éxito (0x00)
+            0x00,                        // Byte 2: Result = Éxito (0x00)
         ];
 
-        // Byte 5+: Auth Code como bytes ASCII (SIN byte de longitud)
+        // Byte 3+: Auth Code como bytes ASCII (SIN byte de longitud)
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
