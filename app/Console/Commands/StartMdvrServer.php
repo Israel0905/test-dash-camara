@@ -229,7 +229,7 @@ class StartMdvrServer extends Command
         // =====================================================
         // Indica al dispositivo que empiece a enviar video.
 
-        $serverIp = '201.164.160.104'; // IP PÚBLICA detectada (para acceso desde 4G)
+        $serverIp = '187.205.81.42'; // IP desde Screenshot del Dispositivo (Linked)
         $videoPort = 8810;     // Puerto donde escucharemos el video (TCP)
         $udpPort = 0;          // 0 = Usar TCP
         $channel = 1;          // Canal 1 (Cámara 1)
