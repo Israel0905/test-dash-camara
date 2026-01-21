@@ -170,25 +170,25 @@ class StartMdvrServer extends Command
         $this->info('   ─────────────────────────────────────────────────');
         $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
 
-        // ESTRUCTURA FINAL ULV Tabla 3.3.2 (10 bytes total):
-        // ┌────────┬────────┬────────┬────────┬─────────────────────────┐
-        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3 │ Byte 4+                 │
-        // ├────────┼────────┼────────┼────────┼─────────────────────────┤
-        // │ Serial │ Serial │ Result │ Length │ Auth Code (STRING)      │
-        // │  High  │  Low   │  (00)  │  (06)  │ "992002" (39 39...)     │
-        // └────────┴────────┴────────┴────────┴─────────────────────────┘
+        // ESTRUCTURA FINAL (9 bytes total):
+        // ┌────────┬────────┬────────┬─────────────────────────────────┐
+        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3+                         │
+        // ├────────┼────────┼────────┼─────────────────────────────────┤
+        // │ Serial │ Serial │ Result │ Auth Code (STRING DIRECTO)      │
+        // │  High  │  Low   │  (00)  │ "992002" (39 39 32 30 30 32)    │
+        // └────────┴────────┴────────┴─────────────────────────────────┘
         //
-        // El Byte 3 contiene la LONGITUD del código (NO es relleno).
-        // Esto permite que el STRING empiece exactamente en el Byte 4.
+        // El código empieza DIRECTAMENTE en Byte 3.
+        // Sin relleno, sin byte de longitud.
+        // (El manual tiene un error tipográfico, dice "Start byte 4" pero debería ser 3)
 
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
             0x00,                        // Byte 2: Result = Éxito
-            strlen($authCode),           // Byte 3: LENGTH (llena el hueco, NO padding)
         ];
 
-        // Byte 4+: Auth Code como bytes ASCII
+        // Byte 3+: Auth Code DIRECTO como bytes ASCII
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
