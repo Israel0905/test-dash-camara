@@ -141,21 +141,25 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        $attr = (1 << 14) | $bodyLen; // Bit 14 para protocolo 2019
+        // Bit 14 activo (0x4000) = Protocolo 2019
+        $attr = 0x4000 | $bodyLen;
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,
+            $msgId & 0xFF, // ID Mensaje
             ($attr >> 8) & 0xFF,
-            ($attr & 0xFF),
-            0x01, // Protocol Version 2019
+            ($attr & 0xFF), // Atributos
+            0x01,                                // Versión 2019
         ];
 
-        foreach ($phoneRaw as $b) {
+        // --- CAMBIO CLAVE AQUÍ: Terminal ID 2019 (20 BYTES) ---
+        // El manual 2019 dice que este campo son 20 bytes. 
+        // Si tu $phoneRaw tiene 10 bytes, hay que rellenar con 10 ceros a la IZQUIERDA.
+        $terminalId2019 = array_pad($phoneRaw, -20, 0x00);
+        foreach ($terminalId2019 as $b) {
             $header[] = $b;
         }
 
-        // Serial del mensaje del servidor (autoincremental)
         static $srvSerial = 1;
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
@@ -170,7 +174,7 @@ class StartMdvrServer extends Command
         }
         $full[] = $cs;
 
-        // Escapado de caracteres (0x7E y 0x7D)
+        // Escapado
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
@@ -186,9 +190,9 @@ class StartMdvrServer extends Command
         $final[] = 0x7E;
 
         $hexOut = strtoupper(bin2hex(pack('C*', ...$final)));
-        @socket_write($socket, pack('C*', ...$final));
-
         $this->line("<fg=green>[SEND HEX]</>: " . implode(' ', str_split($hexOut, 2)));
+
+        @socket_write($socket, pack('C*', ...$final));
     }
 
     private function parseLocation($body)
