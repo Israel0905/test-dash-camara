@@ -6,7 +6,7 @@ use Illuminate\Console\Command;
 
 class StartMdvrServer extends Command
 {
-    protected $signature = 'mdvr:start {--port=8808}';
+    protected $signature = 'mdvr:start {--port=8809}';
     protected $description = 'Servidor JT/T 808 para Ultravision N6 - Debug Mode';
 
     public function handle()
