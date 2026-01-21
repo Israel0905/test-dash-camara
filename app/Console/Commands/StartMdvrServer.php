@@ -56,8 +56,6 @@ class StartMdvrServer extends Command
         $this->line("\n<fg=yellow>[RAW RECV]</>: " . implode(' ', str_split($rawHex, 2)));
 
         $bytes = array_values(unpack('C*', $input));
-
-        // 1. UNESCAPE (Manual Cap 2.2.1)
         $data = [];
         for ($i = 0; $i < count($bytes); $i++) {
             if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
@@ -74,37 +72,23 @@ class StartMdvrServer extends Command
         }
 
         if (count($data) < 15) return;
-
         $payload = array_slice($data, 1, -2);
 
-        // 2. PARSE HEADER 2019 (Tabla 2.2.2)
         $msgId = ($payload[0] << 8) | $payload[1];
         $attr  = ($payload[2] << 8) | $payload[3];
-        $is2019 = ($attr >> 14) & 0x01;
-        $phoneRaw = array_slice($payload, 5, 10);
-        $phone = bin2hex(pack('C*', ...$phoneRaw));
+        $phoneRaw = array_slice($payload, 5, 10); // Los 10 bytes que manda la cámara
         $devSerial = ($payload[15] << 8) | $payload[16];
         $body = array_slice($payload, 17);
 
-        $this->info(sprintf(
-            "[INFO] ID: 0x%04X | Serial Cam: %d | Phone: %s | Ver2019: %s",
-            $msgId,
-            $devSerial,
-            $phone,
-            ($is2019 ? 'SI' : 'NO')
-        ));
+        $this->info(sprintf("[INFO] ID: 0x%04X | Serial Cam: %d | Phone: %s", $msgId, $devSerial, bin2hex(pack('C*', ...$phoneRaw))));
 
-        // 3. LÓGICA DE RESPUESTA
         if ($msgId === 0x0100) {
             $this->comment("   -> Procesando Registro...");
             $this->respondRegistration($socket, $phoneRaw, $devSerial);
         } else {
-            // RESPUESTA GENERAL 0x8001 (Vital para evitar desconexiones)
+            $this->comment("   -> Enviando Respuesta General (0x8001) para ID 0x" . sprintf('%04X', $msgId));
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-
-            if ($msgId === 0x0200) {
-                $this->parseLocation($body);
-            }
+            if ($msgId === 0x0200) $this->parseLocation($body);
         }
     }
 
@@ -114,26 +98,23 @@ class StartMdvrServer extends Command
         $body = [
             ($terminalSerial >> 8) & 0xFF,
             $terminalSerial & 0xFF,
-            0x00, // Resultado: Éxito
+            0x00, // Éxito
         ];
-
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
-        $body[] = 0x00; // Null terminator
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
 
     private function respondGeneral($socket, $phoneRaw, $terminalSerial, $replyId)
     {
-        // Tabla 3.1.2: Serial(2) + MsgID(2) + Result(1)
         $body = [
             ($terminalSerial >> 8) & 0xFF,
             $terminalSerial & 0xFF,
             ($replyId >> 8) & 0xFF,
             $replyId & 0xFF,
-            0x00 // Éxito
+            0x00 // OK
         ];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
@@ -141,22 +122,22 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        // Bit 14 activo (0x4000) = Protocolo 2019
-        $attr = 0x4000 | $bodyLen;
+        $attr = 0x4000 | $bodyLen; // Bit 14 para 2019
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF, // ID Mensaje
+            $msgId & 0xFF,
             ($attr >> 8) & 0xFF,
-            ($attr & 0xFF), // Atributos
-            0x01,                                // Versión 2019
+            $attr & 0xFF,
+            0x01, // Versión
         ];
 
-        // --- CAMBIO CLAVE AQUÍ: Terminal ID 2019 (20 BYTES) ---
-        // El manual 2019 dice que este campo son 20 bytes. 
-        // Si tu $phoneRaw tiene 10 bytes, hay que rellenar con 10 ceros a la IZQUIERDA.
-        $terminalId2019 = array_pad($phoneRaw, -20, 0x00);
-        foreach ($terminalId2019 as $b) {
+        // --- CORRECCIÓN DEFINITIVA TERMINAL ID (20 BYTES) ---
+        // Tu phoneRaw tiene 10 bytes (99 20 02...). Para 2019 necesitamos 20 bytes.
+        // Rellenamos con ceros a la IZQUIERDA.
+        $pad = array_fill(0, 10, 0x00);
+        $terminalId = array_merge($pad, $phoneRaw);
+        foreach ($terminalId as $b) {
             $header[] = $b;
         }
 
@@ -166,15 +147,12 @@ class StartMdvrServer extends Command
         $srvSerial = ($srvSerial + 1) % 65535;
 
         $full = array_merge($header, $body);
-
-        // Checksum XOR
         $cs = 0;
         foreach ($full as $b) {
             $cs ^= $b;
         }
         $full[] = $cs;
 
-        // Escapado
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
@@ -191,7 +169,6 @@ class StartMdvrServer extends Command
 
         $hexOut = strtoupper(bin2hex(pack('C*', ...$final)));
         $this->line("<fg=green>[SEND HEX]</>: " . implode(' ', str_split($hexOut, 2)));
-
         @socket_write($socket, pack('C*', ...$final));
     }
 
@@ -200,6 +177,6 @@ class StartMdvrServer extends Command
         if (count($body) < 28) return;
         $lat = (($body[8] << 24) | ($body[9] << 16) | ($body[10] << 8) | $body[11]) / 1000000;
         $lon = (($body[12] << 24) | ($body[13] << 16) | ($body[14] << 8) | $body[15]) / 1000000;
-        $this->warn("   [GPS] Ubicación: $lat, $lon");
+        $this->warn("   [GPS] $lat, $lon");
     }
 }
