@@ -91,21 +91,21 @@ class StartMdvrServer extends Command
             if ($msgId === 0x0200) $this->parseLocation($body);
         }
     }
-    private function respondRegistration($socket, $phoneRaw, $terminalSerial)
+
+    private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
         $authCode = "123456";
 
-        // Cuerpo 0x8100: Serial(2) + Result(1) + AuthCode(n)
+        // Cuerpo 0x8100 (Tabla 3.3.2): Reply Serial(2) + Result(1) + Auth Code
         $body = [
-            ($terminalSerial >> 8) & 0xFF,
-            $terminalSerial & 0xFF,
+            ($devSerial >> 8) & 0xFF,
+            $devSerial & 0xFF,
             0x00, // Éxito
         ];
 
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
-        // NO agregamos el 0x00 final, para mantener la longitud en 9 bytes exactos.
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
@@ -113,40 +113,39 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        // Bit 14 = 1 (Protocolo 2019), Bits 0-9 = Longitud
+
+        // Atributos: Bit 14 ACTIVADO (0x4000) para indicar 2019
         $attr = 0x4000 | $bodyLen;
 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF, // Message ID (2 bytes)
+            $msgId & 0xFF, // ID Mensaje
             ($attr >> 8) & 0xFF,
-            $attr & 0xFF,   // Message Attr (2 bytes)
-            0x01,                                // Protocol Version (1 byte - 2019)
+            ($attr & 0xFF), // Atributos con Bit 14
+            0x01,                                // Versión 2019 (Obligatorio)
         ];
 
-        // --- REGLA DEL MANUAL: TERMINAL ID DEBE SER 20 BYTES ---
-        // Tu phoneRaw tiene 10 bytes: [00 00 00 00 00 00 00 99 20 02]
-        // Tenemos que rellenar con ceros a la IZQUIERDA hasta completar 20.
-        $terminalId = array_pad($phoneRaw, -20, 0x00);
-        foreach ($terminalId as $b) {
+        foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
+        // Serial del Servidor (Independiente)
         static $srvSerial = 1;
-        $header[] = ($srvSerial >> 8) & 0xFF; // Message Serial (2 bytes)
+        $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
         $srvSerial = ($srvSerial + 1) % 65535;
 
+        // Unir todo para el Checksum
         $full = array_merge($header, $body);
 
-        // Checksum (XOR de todos los bytes del header y body)
+        // --- CÁLCULO XOR REAL ---
         $cs = 0;
-        foreach ($full as $b) {
-            $cs ^= $b;
+        foreach ($full as $byte) {
+            $cs ^= $byte;
         }
         $full[] = $cs;
 
-        // Escapado (0x7E -> 0x7D 0x02, 0x7D -> 0x7D 0x01)
+        // --- ESCAPADO ---
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
