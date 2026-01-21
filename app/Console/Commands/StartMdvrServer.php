@@ -111,20 +111,25 @@ class StartMdvrServer extends Command
         }
     }
 
-    private function respondRegistration($socket, $phoneRaw, $devSerial)
+    private function respondRegistration($socket, $phoneRaw, $terminalSerial)
     {
+        // INTENTO A: Usar un Auth Code que termine en 0x00 (Null Terminator)
+        // A veces el equipo lo lee como string de C y si no hay nulo, se sigue de largo.
         $authCode = "123456";
 
-        // Cuerpo 0x8100 (Tabla 3.3.2): Reply Serial(2) + Result(1) + Auth Code
         $body = [
-            ($devSerial >> 8) & 0xFF,
-            $devSerial & 0xFF,
-            0x00, // Éxito
+            ($terminalSerial >> 8) & 0xFF,
+            $terminalSerial & 0xFF,
+            0x00, // Resultado: Éxito
         ];
 
         foreach (str_split($authCode) as $char) {
             $body[] = ord($char);
         }
+
+        // Agregamos un byte NULO al final por si el MDVR espera terminación de cadena
+        // Esto cambiará la longitud del cuerpo de 9 a 10.
+        $body[] = 0x00;
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
@@ -185,26 +190,11 @@ class StartMdvrServer extends Command
         @socket_write($socket, pack('C*', ...$final));
     }
 
-    /**
-     * Respuesta General del Servidor (Plataforma) -> Terminal
-     * ID Mensaje: 0x8001
-     */
-    private function respondGeneral($socket, $phoneRaw, $deviceSerial, $replyMsgId)
+    private function parseLocation($body)
     {
-        // Estructura del Cuerpo (Tabla 3.1.2):
-        // 1. Reply Serial Number (WORD): El serial del mensaje que mandó la cámara
-        // 2. Reply Message ID (WORD): El ID del mensaje que mandó la cámara (ej: 0x0102, 0x0002)
-        // 3. Result (BYTE): 0 = Éxito/Confirmado, 1 = Fallo, 2 = Mensaje Erróneo...
-
-        $body = [
-            ($deviceSerial >> 8) & 0xFF, // Serial de la cámara (High)
-            $deviceSerial & 0xFF,        // Serial de la cámara (Low)
-            ($replyMsgId >> 8) & 0xFF,   // ID del mensaje que confirmamos (High)
-            $replyMsgId & 0xFF,          // ID del mensaje que confirmamos (Low)
-            0x00                         // Resultado: 0 (Éxito)
-        ];
-
-        $this->comment("   -> Confirmando mensaje 0x" . sprintf('%04X', $replyMsgId));
-        $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+        if (count($body) < 28) return;
+        $lat = (($body[8] << 24) | ($body[9] << 16) | ($body[10] << 8) | $body[11]) / 1000000;
+        $lon = (($body[12] << 24) | ($body[13] << 16) | ($body[14] << 8) | $body[15]) / 1000000;
+        $this->warn("   [Ubicación] $lat, $lon");
     }
 }
