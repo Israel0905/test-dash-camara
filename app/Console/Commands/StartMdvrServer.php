@@ -126,23 +126,32 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        $attr = 0x4000 | $bodyLen; // BIT 14 SIEMPRE 1 PARA 2019
+        $isV2019 = (count($phoneRaw) > 10); // Si recibimos más de 10 bytes, es 2019
+
+        // 1. Construir Atributos (Bit 14 indica versión 2019)
+        $attr = $bodyLen;
+        if ($isV2019) {
+            $attr |= 0x4000;
+        }
 
         $header = [
             ($msgId >> 8) & 0xFF,
             $msgId & 0xFF,
             ($attr >> 8) & 0xFF,
             $attr & 0xFF,
-            0x01, // Protocol Version (Obligatorio en 2019)
         ];
 
-        // --- EL TRUCO DEL MANUAL: FORZAR 20 BYTES ---
-        // Si el teléfono tiene 10 bytes, le pegamos 10 ceros a la IZQUIERDA.
-        $terminalId = array_pad(array_slice($phoneRaw, -10), -20, 0x00);
-        foreach ($terminalId as $b) {
+        // 2. Si es 2019, añadir campo "Protocol Version"
+        if ($isV2019) {
+            $header[] = 0x01; // Versión de protocolo
+        }
+
+        // 3. Añadir el Terminal ID (Phone) tal cual se recibió
+        foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
+        // 4. Serial del mensaje (Servidor)
         static $srvSerial = 1;
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
@@ -150,13 +159,14 @@ class StartMdvrServer extends Command
 
         $full = array_merge($header, $body);
 
+        // 5. Checksum (XOR)
         $cs = 0;
         foreach ($full as $byte) {
             $cs ^= $byte;
         }
         $full[] = $cs;
 
-        // Escapado
+        // 6. Escapado de caracteres especiales
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
