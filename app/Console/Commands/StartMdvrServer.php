@@ -174,21 +174,21 @@ class StartMdvrServer extends Command
         // ┌────────┬────────┬────────┬────────┬───────────────────────────────┐
         // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3 │ Byte 4+                       │
         // ├────────┼────────┼────────┼────────┼───────────────────────────────┤
-        // │ Serial │ Serial │ Result │ Length │ Auth Code (ID COMPLETO)       │
-        // │  High  │  Low   │  (00)  │  (0C)  │ "000000992002" (30 30...)     │
+        // │ Serial │ Serial │ Result │RELLENO │ Auth Code (ID COMPLETO)       │
+        // │  High  │  Low   │  (00)  │  (00)  │ "000000992002" (30 30...)     │
         // └────────┴────────┴────────┴────────┴───────────────────────────────┘
         //
-        // Byte 3 = Length (0x0C = 12 decimal)
-        // Byte 4+ = String empieza exactamente en byte 4
+        // Byte 3 = RELLENO (0x00) - Para alinear al "Start Byte 4" del manual
+        // Byte 4+ = String CRUDO sin byte de longitud
 
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
             0x00,                        // Byte 2: Result = Éxito
-            strlen($authCode),           // Byte 3: Length (0x0C = 12)
+            0x00,                        // Byte 3: RELLENO (alinea al byte 4)
         ];
 
-        // Byte 4+: Auth Code (ID COMPLETO) como bytes ASCII
+        // Byte 4+: Auth Code (ID COMPLETO) como bytes ASCII - SIN longitud
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
