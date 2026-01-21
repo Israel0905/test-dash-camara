@@ -170,19 +170,21 @@ class StartMdvrServer extends Command
         $this->info('   ─────────────────────────────────────────────────');
         $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
 
-        // ESTRUCTURA CORRECTA ULV Tablas 3.3.2 + 3.4:
+        // ESTRUCTURA CORRECTA ULV Tablas 3.3.2 + 3.4 (11 bytes total):
         // Byte 0-1: Reply Serial Number (WORD)
         // Byte 2:   Result (BYTE) - 0 = Éxito
-        // Byte 3:   Length del Auth Code (BYTE) ← ¡NO es padding, es la longitud!
-        // Byte 4+:  Auth Code (ASCII String)
+        // Byte 3:   RELLENO (0x00) - Empuja la longitud al Byte 4
+        // Byte 4:   Length del Auth Code (BYTE) - Aquí inicia según Tabla 3.3.2
+        // Byte 5+:  Auth Code (ASCII String)
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
             0x00,                        // Byte 2: Result = Éxito
-            strlen($authCode),           // Byte 3: Length del código (NO padding!)
+            0x00,                        // Byte 3: RELLENO (empuja Length al byte 4)
+            strlen($authCode),           // Byte 4: Length del código
         ];
 
-        // Byte 4+: Auth Code como bytes ASCII
+        // Byte 5+: Auth Code como bytes ASCII
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
