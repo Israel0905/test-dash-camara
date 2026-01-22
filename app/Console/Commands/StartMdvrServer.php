@@ -23,6 +23,7 @@ class StartMdvrServer extends Command
         0x0704 => 'GPS Lote',
         0x0900 => 'Datos Extra',
         0x8001 => 'ACK Servidor',
+        0x8004 => 'Sync Hora',
         0x8100 => 'Registro OK',
     ];
 
@@ -139,16 +140,29 @@ class StartMdvrServer extends Command
         $body = array_slice($data, 17);
         $phoneRaw = array_slice($data, 5, 10);
 
-        // LOG MEJORADO: Mensaje recibido
+        // LOG: Mensaje recibido
         $msgName = $this->getMsgName($msgId);
         $this->line(sprintf(
             '   📥 <fg=yellow>%-15s</> #%-3d │ Tel: %s',
             $msgName, $devSerial, substr($phone, -8)
         ));
 
+        // --- LÓGICA DE RESPUESTA ---
         if ($msgId === 0x0100) {
+            // 1. REGISTRO
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body, $protoVer);
+
+        } elseif ($msgId === 0x0102) {
+            // 2. AUTENTICACIÓN
+            // Primero confirmamos que la Auth es correcta
+            $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $protoVer);
+
+            // CRÍTICO: Esperamos 100ms y enviamos la hora para estabilizar la conexión
+            usleep(100000);
+            $this->sendServerTime($socket, $phoneRaw, $protoVer);
+
         } else {
+            // 3. CUALQUIER OTRO MENSAJE (Heartbeat, GPS, Alarmas)
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $protoVer);
         }
     }
@@ -167,6 +181,29 @@ class StartMdvrServer extends Command
     {
         $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, ($replyId >> 8) & 0xFF, $replyId & 0xFF, 0x00];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body, $protoVer);
+    }
+
+    /**
+     * Envía la hora del servidor al dispositivo (0x8004)
+     * Esto es CRÍTICO para que la cámara no se reinicie
+     */
+    private function sendServerTime($socket, $phoneRaw, $protoVer)
+    {
+        // 0x8004: Mensaje de Sincronización de Tiempo
+        // La fecha debe ser enviada como BCD: AA-MM-DD-HH-mm-ss (6 bytes)
+        $dateStr = date('ymdHis'); // Ejemplo: 260122124706 (22 Ene 2026 12:47:06)
+
+        $body = [];
+        // Convertimos cada par de números del string en un byte hexadecimal
+        // Ej: "26" se convierte en el byte 0x26
+        foreach (str_split($dateStr, 2) as $part) {
+            $body[] = hexdec($part);
+        }
+
+        $this->line('   ⏰ <fg=cyan>Sincronizando hora:</> '.date('Y-m-d H:i:s'));
+
+        // Enviamos el paquete 0x8004
+        $this->sendPacket($socket, 0x8004, $phoneRaw, $body, $protoVer);
     }
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body, $protoVer = 0x01)
@@ -204,7 +241,7 @@ class StartMdvrServer extends Command
         }
         $final[] = 0x7E;
 
-        // LOG MEJORADO: Respuesta enviada
+        // LOG: Respuesta enviada
         $replyName = $this->getMsgName($msgId);
         $this->line(sprintf('   📤 <fg=green>%-15s</> ✓', $replyName));
 
