@@ -127,21 +127,26 @@ class StartMdvrServer extends Command
 
         // 3. Header y Respuesta
         $msgId = ($data[0] << 8) | $data[1];
+
+        // FIX 1: Capturar la versión del protocolo que envía la cámara (byte 4)
+        $protoVer = $data[4];
+
         $phone = bin2hex(pack('C*', ...array_slice($data, 5, 10)));
         $devSerial = ($data[15] << 8) | $data[16];
         $body = array_slice($data, 17);
 
-        $this->info(sprintf('[MSG] ID: 0x%04X | Serial: %d | Phone: %s', $msgId, $devSerial, $phone));
+        $this->info(sprintf('[MSG] ID: 0x%04X | Serial: %d | Phone: %s | ProtoVer: %d', $msgId, $devSerial, $phone, $protoVer));
 
         $phoneRaw = array_slice($data, 5, 10);
+
         if ($msgId === 0x0100) {
-            $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
+            $this->respondRegistration($socket, $phoneRaw, $devSerial, $body, $protoVer);
         } else {
-            $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+            $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $protoVer);
         }
     }
 
-    private function respondRegistration($socket, $phoneRaw, $devSerial, $body)
+    private function respondRegistration($socket, $phoneRaw, $devSerial, $body, $protoVer)
     {
         $this->info('   -> Procesando Registro...');
         $authCode = '123456';
@@ -149,19 +154,24 @@ class StartMdvrServer extends Command
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
-        $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
+        $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody, $protoVer);
     }
 
-    private function respondGeneral($socket, $phoneRaw, $devSerial, $replyId)
+    private function respondGeneral($socket, $phoneRaw, $devSerial, $replyId, $protoVer)
     {
         $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, ($replyId >> 8) & 0xFF, $replyId & 0xFF, 0x00];
-        $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+        $this->sendPacket($socket, 0x8001, $phoneRaw, $body, $protoVer);
     }
 
-    private function sendPacket($socket, $msgId, $phoneRaw, $body)
+    private function sendPacket($socket, $msgId, $phoneRaw, $body, $protoVer = 0x01)
     {
-        $attr = 0x4000 | count($body);
-        $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF, 0x01];
+        // FIX 2: Cambiar 0x4000 por 0x0000 (texto plano, sin cifrar)
+        // El bit 14 (0x4000) puede ser interpretado como "paquete encriptado" por algunas cámaras
+        $attr = 0x0000 | count($body);
+
+        // FIX 1 (continuación): Usar la versión del protocolo que envió la cámara
+        $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF, $protoVer];
+
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
