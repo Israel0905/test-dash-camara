@@ -6,54 +6,31 @@ use Illuminate\Console\Command;
 
 class StartMdvrServer extends Command
 {
-    protected $signature = 'mdvr:start {--port=8808} {--video-port=8810}';
-    protected $description = 'Servidor JT/T 808 Dual-Port para Ultravision N6';
+    protected $signature = 'mdvr:start {--port=8808}';
+    protected $description = 'Servidor JT/T 808 para Ultravision N6 - Single Port';
 
     private $clientSerials = [];
-    private $portLabels = [];
 
     public function handle()
     {
-        $commandPort = (int) $this->option('port');
-        $videoPort = (int) $this->option('video-port');
+        $port = (int) $this->option('port');
         $address = '0.0.0.0';
 
-        // Crear socket para puerto de comandos (8808)
-        $commandSocket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-        socket_set_option($commandSocket, SOL_SOCKET, SO_REUSEADDR, 1);
-        socket_set_option($commandSocket, SOL_SOCKET, SO_KEEPALIVE, 1);
+        $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
+        socket_set_option($socket, SOL_SOCKET, SO_KEEPALIVE, 1);
 
-        if (!@socket_bind($commandSocket, $address, $commandPort)) {
-            $this->error("Error: Puerto $commandPort ocupado.");
+        if (!@socket_bind($socket, $address, $port)) {
+            $this->error("Error: Puerto $port ocupado.");
             return;
         }
-        socket_listen($commandSocket);
-
-        // Crear socket para puerto de video (8810)
-        $videoSocket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-        socket_set_option($videoSocket, SOL_SOCKET, SO_REUSEADDR, 1);
-        socket_set_option($videoSocket, SOL_SOCKET, SO_KEEPALIVE, 1);
-
-        if (!@socket_bind($videoSocket, $address, $videoPort)) {
-            $this->error("Error: Puerto $videoPort ocupado.");
-            return;
-        }
-        socket_listen($videoSocket);
-
-        // Guardar referencia de qué puerto es cada socket
-        $this->portLabels[spl_object_id($commandSocket)] = 'CMD';
-        $this->portLabels[spl_object_id($videoSocket)] = 'VIDEO';
+        socket_listen($socket);
 
         $this->info('╔═══════════════════════════════════════════════════════╗');
-        $this->info('║        SERVIDOR MDVR DUAL-PORT (JTT808 2019)          ║');
-        $this->info('╠═══════════════════════════════════════════════════════╣');
-        $this->info("║  Puerto Comandos: $commandPort                              ║");
-        $this->info("║  Puerto Video:    $videoPort                              ║");
+        $this->info("║        SERVIDOR MDVR - PUERTO $port                     ║");
         $this->info('╚═══════════════════════════════════════════════════════╝');
 
-        // Ambos sockets de escucha van al array de clientes
-        $clients = [$commandSocket, $videoSocket];
-        $servers = [$commandSocket, $videoSocket];
+        $clients = [$socket];
 
         while (true) {
             $read = $clients;
@@ -61,35 +38,26 @@ class StartMdvrServer extends Command
 
             if (socket_select($read, $write, $except, 0, 100000) > 0) {
                 foreach ($read as $s) {
-                    // Si es uno de los sockets de servidor, aceptar nueva conexión
-                    if (in_array($s, $servers)) {
+                    if ($s === $socket) {
                         $newSocket = socket_accept($s);
                         if ($newSocket) {
                             socket_set_option($newSocket, SOL_SOCKET, SO_KEEPALIVE, 1);
                             $clients[] = $newSocket;
                             $this->clientSerials[spl_object_id($newSocket)] = 1;
-
-                            // Identificar de qué puerto viene
-                            $portType = ($s === $commandSocket) ? 'CMD' : 'VIDEO';
-                            $this->portLabels[spl_object_id($newSocket)] = $portType;
-
                             $ip = $this->getIp($newSocket);
-                            $this->warn("\n[CONN:$portType] Nueva conexión desde $ip");
+                            $this->warn("\n[CONN] Nueva conexión desde $ip");
                         }
                     } else {
-                        // Es un cliente existente, leer datos
                         $input = @socket_read($s, 65535);
                         if ($input) {
                             $this->splitAndProcess($s, $input);
                         } else {
                             $objId = spl_object_id($s);
-                            $portType = $this->portLabels[$objId] ?? '???';
                             unset($this->clientSerials[$objId]);
-                            unset($this->portLabels[$objId]);
                             @socket_close($s);
                             $key = array_search($s, $clients);
                             if ($key !== false) unset($clients[$key]);
-                            $this->error("[DESC:$portType] Conexión cerrada.");
+                            $this->error('[DESC] Conexión cerrada.');
                         }
                     }
                 }
@@ -109,8 +77,6 @@ class StartMdvrServer extends Command
 
     private function processBuffer($socket, $input)
     {
-        $objId = spl_object_id($socket);
-        $portType = $this->portLabels[$objId] ?? '???';
         $rawHex = strtoupper(bin2hex($input));
         $bytes = array_values(unpack('C*', $input));
 
@@ -138,12 +104,13 @@ class StartMdvrServer extends Command
         $phone = bin2hex(pack('C*', ...$phoneRaw));
         $devSerial = ($data[16] << 8) | $data[17];
 
-        $this->line("\n<fg=cyan>[$portType] MSG 0x" . sprintf('%04X', $msgId) . " | Serial: $devSerial | Phone: $phone</>");
+        $this->line("\n<fg=cyan>MSG 0x" . sprintf('%04X', $msgId) . " | Serial: $devSerial | Phone: $phone</>");
+        $this->line("<fg=gray>RAW: " . implode(' ', str_split($rawHex, 2)) . "</>");
 
         switch ($msgId) {
             case 0x0100:
                 $this->info("   ↳ Registro - Respondiendo 0x8100");
-                $this->clientSerials[$objId] = 1;
+                $this->clientSerials[spl_object_id($socket)] = 1;
                 $this->respondRegistration($socket, $phoneRaw, $devSerial);
                 break;
             case 0x0002:
@@ -163,7 +130,7 @@ class StartMdvrServer extends Command
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
             default:
-                $this->comment("   ↳ Mensaje 0x" . sprintf('%04X', $msgId) . " - Respondiendo 0x8001");
+                $this->comment("   ↳ Msg 0x" . sprintf('%04X', $msgId) . " - Respondiendo 0x8001");
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
         }
@@ -201,7 +168,6 @@ class StartMdvrServer extends Command
     {
         $objId = spl_object_id($socket);
         $srvSerial = $this->clientSerials[$objId] ?? 1;
-        $portType = $this->portLabels[$objId] ?? '???';
 
         $bodyLen = count($body);
         $attr = 0x4000 | ($bodyLen & 0x03FF);
@@ -244,7 +210,7 @@ class StartMdvrServer extends Command
         $binOut = pack('C*', ...$final);
         @socket_write($socket, $binOut);
 
-        $this->line("<fg=green>   ← [$portType] REPLY 0x" . sprintf('%04X', $msgId) . " | SrvSerial: $srvSerial</>");
+        $this->line("<fg=green>   ← REPLY 0x" . sprintf('%04X', $msgId) . " | SrvSerial: $srvSerial</>");
 
         $this->clientSerials[$objId] = ($srvSerial + 1) % 65535;
     }
