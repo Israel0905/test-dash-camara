@@ -183,7 +183,7 @@ class StartMdvrServer extends Command
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
             $devSerial & 0xFF,          // Byte 1: Reply Serial Low
-            0x00,                        // Byte 2: Result = Éxito (0x00)
+            0x01,                        // Byte 2: Result = Ya Registrado (0x01)
         ];
 
         // Byte 3+: Auth Code como bytes ASCII (SIN byte de longitud)
