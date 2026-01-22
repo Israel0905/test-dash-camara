@@ -26,7 +26,6 @@ class StartMdvrServer extends Command
         socket_listen($socket);
         $this->info('=====================================================');
         $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port");
-        $this->info('[VERSION] LOG OPTIMIZED + AGGRESSIVE FILTERING (NO HEX DUMP FOR VIDEO)');
         $this->info('=====================================================');
 
         $clients = [$socket];
@@ -55,39 +54,12 @@ class StartMdvrServer extends Command
 
     private function processBuffer($socket, $input)
     {
-        // --- VISUALIZACIÓN DE TRAMA ---
-        // --- FILTRO DE TRAMAS (Optimización Agresiva de Logs) ---
-        // El protocolo JTT808 SIEMPRE debe empezar con 0x7E.
-        // El Stream de Video JTT1078 es binario crudo y NO empieza con 0x7E obligatoriamente.
-        // Si no empieza con 0x7E, asumimos que es video y NO mostramos el Hex Dump para no saturar la terminal.
-
-        $firstByte = ord($input[0]);
-        if ($firstByte !== 0x7E) {
-            $len = strlen($input);
-            $msg = "<fg=green>[VIDEO/BINARY STREAM]</>: Recibidos $len bytes.";
-
-            // Opcional: Si vemos la firma del video '01cd' (30 31 63 64) la destacamos
-            if (strpos($input, "\x30\x31\x63\x64") !== false) {
-                $msg .= ' <fg=cyan>(Firma JTT1078 detectada)</>';
-            }
-
-            $this->line($msg);
-
-            return; // Detenemos procesamiento de este chunk
-        }
-
-        // --- VISUALIZACIÓN DE TRAMA DE CONTROL (Solo si empiez con 0x7E) ---
         $rawHex = strtoupper(bin2hex($input));
         $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
-        // Transformamos la cadena en un array de bytes (números) para procesarlos.
         $bytes = array_values(unpack('C*', $input));
 
-        // --- 1. DESESCAPADO / UNESCAPE (Manual Sección 3.2.1) ---
-        // El protocolo usa 0x7E como marca de inicio y fin.
-        // Si los datos contienen 0x7E, el terminal envía 0x7D 0x02.
-        // Si los datos contienen 0x7D, el terminal envía 0x7D 0x01.
-        // Aquí restauramos esos valores a su estado original.
+        // 1. UNESCAPE (Manual Cap 2.2.1)
         $data = [];
         for ($i = 0; $i < count($bytes); $i++) {
             if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
@@ -103,34 +75,23 @@ class StartMdvrServer extends Command
             }
         }
 
-        // Validación: El mensaje debe tener al menos el Header completo y el Checksum.
         if (count($data) < 15) {
             return;
         }
 
-        // El Payload es el cuerpo útil: quitamos el primer 0x7E, el último 0x7E y el byte de Checksum.
+        // Payload sin delimitadores 7E ni checksum
         $payload = array_slice($data, 1, -2);
 
-        // --- 2. EXTRACCIÓN DEL HEADER (Manual Sección 3.3 / Tabla 2.2.2) ---
-        // [Bytes 0-1]: Message ID. Identifica la función (ej: 0x0100 es Registro de Terminal).
+        // 2. PARSE HEADER 2019 (Tabla 2.2.2)
         $msgId = ($payload[0] << 8) | $payload[1];
-
-        // [Bytes 2-3]: Message Body Attributes. El Bit 14 indica si es Protocolo 2019 (1=Sí).
         $attr = ($payload[2] << 8) | $payload[3];
         $is2019 = ($attr >> 14) & 0x01;
 
-        // [Byte 4]: Protocol Version. En el estándar 2019, este valor debe ser 0x01.
+        // En 2019 el Protocol Version es el byte 4
         $protocolVer = $payload[4];
-
-        // [Bytes 5-14]: Terminal ID (Phone). Son 10 bytes en formato BCD (20 dígitos).
-        // Es el identificador único que usaremos para responderle al equipo.
         $phone = bin2hex(pack('C*', ...array_slice($payload, 5, 10)));
-
-        // [Bytes 15-16]: Message Sequence Number (Serial). Es el contador de mensajes del terminal.
+        // El Serial de la cámara está en bytes 15-16
         $devSerial = ($payload[15] << 8) | $payload[16];
-
-        // --- 3. EXTRACCIÓN DEL BODY ---
-        // [Byte 17 en adelante]: Aquí comienza la información específica del mensaje.
         $body = array_slice($payload, 17);
 
         $this->info(sprintf(
@@ -141,24 +102,18 @@ class StartMdvrServer extends Command
             ($is2019 ? 'SI' : 'NO')
         ));
 
-        // --- 4. SECCIÓN DE RESPUESTAS (Flujo de Conexión) ---
-        // Guardamos los 10 bytes del Phone para incluirlos en el encabezado de nuestra respuesta.
+        // 3. RESPUESTAS
         $phoneRaw = array_slice($payload, 5, 10);
         $phoneHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
         $this->line("   Phone RAW (para respuesta): <fg=cyan>$phoneHex</>");
 
         if ($msgId === 0x0100) {
-            // Mensaje de Registro (Terminal Registration):
-            // Respondemos con 0x8100 y enviamos un "Authentication Code" en el Body.
             $this->comment('   -> Procesando Registro...');
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
         } else {
-            // Respuesta General (Platform Generic Response - 0x8001):
-            // Se usa para confirmar Autenticación (0x0102), Latidos (Heartbeat) o GPS.
             $this->comment('   -> Enviando Respuesta General (0x8001)...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
 
-            // Si el ID es 0x0200, el Body contiene datos de ubicación (Latitud, Longitud, etc.)
             if ($msgId === 0x0200) {
                 $this->parseLocation($body);
             }
@@ -207,78 +162,40 @@ class StartMdvrServer extends Command
         $this->line('   Plate: '.($plate ?: '(vacío)'));
 
         // =====================================================
-        // CONSTRUCCIÓN DE LA RESPUESTA QUE SÍ FUNCIONÓ
+        // CONSTRUIR RESPUESTA 0x8100 (Estructura Final Corregida)
         // =====================================================
-        $authCode = '123456';
+        // Usamos una contraseña simple de 6 dígitos
+        $authCode = '123456';  // Contraseña de sesión
 
         $this->info('   ─────────────────────────────────────────────────');
-        $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
-
-        // ESTRUCTURA GANADORA (9 BYTES):
-        // ┌────────┬────────┬────────┬───────────────────────┐
-        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3+               │
-        // ├────────┼────────┼────────┼───────────────────────┤
-        // │ Serial │ Serial │ Result │ Auth Code             │
-        // │  High  │  Low   │  (00)  │ "123456"              │
-        // └────────┴────────┴────────┴───────────────────────┘
+        // ESTRUCTURA ESTÁNDAR JTT808 (9 bytes total):
+        // ┌────────┬────────┬────────┬───────────────────────────┐
+        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3+                   │
+        // ├────────┼────────┼────────┼───────────────────────────┤
+        // │ Serial │ Serial │ Result │ Auth Code (STRING)        │
+        // │  High  │  Low   │  (00)  │ "123456"                  │
+        // └────────┴────────┴────────┴───────────────────────────┘
+        //
+        // Byte 0-1: Reply Serial Number (copia del recibido)
+        // Byte 2:   Result (0x00 = Éxito)
+        // Byte 3+:  Auth Code (STRING) - Sin byte de longitud
 
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
-            $devSerial & 0xFF,         // Byte 1: Reply Serial Low
-            0x00,                      // Byte 2: Resultado (0 = Éxito)
+            $devSerial & 0xFF,          // Byte 1: Reply Serial Low
+            0x00,                        // Byte 2: Result = Éxito (0x00)
         ];
 
-        // Byte 3 en adelante: Código DIRECTO (Sin padding, sin longitud, sin reply ID)
+        // Byte 3+: Auth Code como bytes ASCII (SIN byte de longitud)
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
 
-        // Mostrar hex para confirmar que son 9 bytes (ej: 00 00 00 31 32 33 34 35 36)
+        // Mostrar hex del body para debug
         $bodyHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $responseBody));
-        $this->line("   Body HEX (Ganador): <fg=magenta>$bodyHex</>");
+        $this->line("   Body HEX: <fg=magenta>$bodyHex</>");
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
-    }
-
-    private function sendVideoRequest($socket, $phoneRaw)
-    {
-        // =====================================================
-        // SOLICITUD DE VIDEO REAL (0x9101) - JTT1078
-        // =====================================================
-        // Indica al dispositivo que empiece a enviar video.
-
-        $serverIp = '187.205.81.42'; // IP desde Screenshot del Dispositivo (Linked)
-        // $serverIp = '187.205.81.42'; // IP desde Screenshot del Dispositivo (Linked) - MANTENER IP PÚBLICA
-        // En una implementación real, aquí usarías config('mdvr.server_ip') o similar.
-        // Pero para esta prueba unificada, apuntamos todo al 8808.
-
-        $serverIp = '187.205.81.42';
-        $videoPort = 8808;     // <--- CAMBIO: Solicitamos video al MISMO puerto de control
-        $udpPort = 0;          // 0 = Usar TCP
-        $channel = 1;          // Canal 1 (Cámara 1)
-        $dataType = 0;         // 0 = AV, 1 = Video, 2 = Audio, 3 = Talk
-        $streamType = 0;       // 0 = Main Stream, 1 = Sub Stream
-
-        $ipLength = strlen($serverIp);
-
-        $body = [
-            $ipLength,
-        ];
-
-        foreach (str_split($serverIp) as $char) {
-            $body[] = ord($char);
-        }
-
-        $body[] = ($videoPort >> 8) & 0xFF; // Video Port TCP
-        $body[] = $videoPort & 0xFF;
-        $body[] = ($udpPort >> 8) & 0xFF;   // UDP Port (0)
-        $body[] = $udpPort & 0xFF;
-        $body[] = $channel;
-        $body[] = $dataType;
-        $body[] = $streamType;
-
-        $this->info("   -> Solicitando VIDEO (0x9101) al puerto $videoPort...");
-        $this->sendPacket($socket, 0x9101, $phoneRaw, $body);
     }
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
@@ -372,13 +289,5 @@ class StartMdvrServer extends Command
 
         $this->comment('   -> Confirmando mensaje 0x'.sprintf('%04X', $replyMsgId));
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
-
-        // --- TRIGGER AUTOMÁTICO DE VIDEO JTT1078 ---
-        // Si acabamos de confirmar la Autenticación (0x0102), pedimos el video inmediatamente.
-        if ($replyMsgId === 0x0102) {
-            $this->warn('   [AUTO] Autenticación exitosa. Iniciando solicitud de Video...');
-            sleep(1); // Pequeña pausa para asegurar que el dispositivo procesó el 0x8001
-            $this->sendVideoRequest($socket, $phoneRaw);
-        }
     }
 }
