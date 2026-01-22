@@ -71,68 +71,95 @@ class StartMdvrServer extends Command
 
     private function processBuffer($socket, $input)
     {
-        $rawHex = strtoupper(bin2hex($input));
-        // $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
+        // 1. SOLUCIÓN "STICKY PACKETS"
+        // La cámara manda muchos mensajes juntos. Usamos explode para separarlos por el delimitador 7E.
+        // El caracter 0x7E es '~' en ASCII.
+        $rawPackets = explode(chr(0x7E), $input);
 
-        $bytes = array_values(unpack('C*', $input));
-
-        // 1. UNESCAPE (Manual Cap 2.2.1)
-        $data = [];
-        for ($i = 0; $i < count($bytes); $i++) {
-            if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
-                if ($bytes[$i + 1] === 0x01) {
-                    $data[] = 0x7D;
-                    $i++;
-                } elseif ($bytes[$i + 1] === 0x02) {
-                    $data[] = 0x7E;
-                    $i++;
-                }
-            } else {
-                $data[] = $bytes[$i];
+        foreach ($rawPackets as $packetData) {
+            // Si el paquete está vacío o es muy corto (ruido), lo saltamos
+            if (strlen($packetData) < 3) {
+                continue;
             }
-        }
 
-        if (count($data) < 15) {
-            return;
-        }
+            // PROCESAR CADA MENSAJE INDIVIDUALMENTE
+            // Nota: packetData ya viene SIN los 7E de inicio/fin porque explode los quitó.
 
-        // Payload sin delimitadores 7E ni checksum
-        $payload = array_slice($data, 1, -2);
+            $bytes = array_values(unpack('C*', $packetData));
 
-        // 2. PARSE HEADER 2019 (Tabla 2.2.2)
-        $msgId = ($payload[0] << 8) | $payload[1];
-        $attr = ($payload[2] << 8) | $payload[3];
-        $is2019 = ($attr >> 14) & 0x01;
+            // 2. UNESCAPE (Manual Cap 2.2.1)
+            $data = [];
+            for ($i = 0; $i < count($bytes); $i++) {
+                if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
+                    if ($bytes[$i + 1] === 0x01) {
+                        $data[] = 0x7D;
+                        $i++;
+                    } elseif ($bytes[$i + 1] === 0x02) {
+                        $data[] = 0x7E;
+                        $i++;
+                    }
+                } else {
+                    $data[] = $bytes[$i];
+                }
+            }
 
-        // En 2019 el Protocol Version es el byte 4
-        $protocolVer = $payload[4];
-        $phone = bin2hex(pack('C*', ...array_slice($payload, 5, 10)));
-        // El Serial de la cámara está en bytes 15-16
-        $devSerial = ($payload[15] << 8) | $payload[16];
-        $body = array_slice($payload, 17);
+            // Validar longitud mínima después de unescape
+            if (count($data) < 12) { // Header(12) + Checksum(1) mínimo
+                continue;
+            }
 
-        $this->info(sprintf(
-            '[INFO] ID: 0x%04X | Serial: %d | Phone: %s | Ver2019: %s',
-            $msgId,
-            $devSerial,
-            $phone,
-            ($is2019 ? 'SI' : 'NO')
-        ));
+            // Ya tenemos el payload limpio (Header + Body + Checksum)
+            // No necesitamos array_slice porque explode ya quitó los 7E externos
+            $payload = $data;
 
-        // 3. RESPUESTAS
-        $phoneRaw = array_slice($payload, 5, 10);
-        $phoneHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
-        $this->line("   Phone RAW (para respuesta): <fg=cyan>$phoneHex</>");
+            // Verificar Checksum (XOR de todo menos el último byte)
+            $calcCs = 0;
+            $len = count($payload);
+            $receivedCs = $payload[$len - 1]; // Último byte es el checksum
 
-        if ($msgId === 0x0100) {
-            $this->comment('   -> Procesando Registro...');
-            $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
-        } else {
-            $this->comment('   -> Enviando Respuesta General (0x8001)...');
-            $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+            for ($k = 0; $k < $len - 1; $k++) {
+                $calcCs ^= $payload[$k];
+            }
 
-            if ($msgId === 0x0200) {
-                $this->parseLocation($body);
+            if ($calcCs !== $receivedCs) {
+                // Si el checksum falla, es un fragmento corrupto, lo ignoramos
+                // $this->error("Checksum error: Cal: $calcCs Rec: $receivedCs");
+                continue;
+            }
+
+            // Quitar el checksum del final para procesar
+            $bodyWithHeader = array_slice($payload, 0, -1);
+
+            // 3. PARSE HEADER 2019
+            $msgId = ($bodyWithHeader[0] << 8) | $bodyWithHeader[1];
+            $attr = ($bodyWithHeader[2] << 8) | $bodyWithHeader[3];
+            $is2019 = ($attr >> 14) & 0x01;
+
+            $protocolVer = $bodyWithHeader[4];
+            $phone = bin2hex(pack('C*', ...array_slice($bodyWithHeader, 5, 10)));
+            $devSerial = ($bodyWithHeader[15] << 8) | $bodyWithHeader[16];
+
+            // El cuerpo empieza en el byte 17
+            $body = array_slice($bodyWithHeader, 17);
+
+            // LOG LIMPIO (Solo lo esencial)
+            $this->info(sprintf(
+                '[MSG] ID: 0x%04X | Serial: %d | Phone: %s',
+                $msgId, $devSerial, $phone
+            ));
+
+            // 4. RESPUESTAS
+            $phoneRaw = array_slice($bodyWithHeader, 5, 10);
+
+            if ($msgId === 0x0100) {
+                $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
+            } else {
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+
+                // Si quieres guardar la ubicación:
+                if ($msgId === 0x0200 || $msgId === 0x0704) {
+                    // $this->parseLocation($body);
+                }
             }
         }
     }
