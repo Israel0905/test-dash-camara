@@ -13,6 +13,19 @@ class StartMdvrServer extends Command
     // Buffers para guardar fragmentos de cada cámara
     private $clientBuffers = [];
 
+    // Nombres descriptivos de los mensajes JTT808
+    private $msgNames = [
+        0x0001 => 'ACK Terminal',
+        0x0002 => 'Heartbeat',
+        0x0100 => 'Registro',
+        0x0102 => 'Autenticación',
+        0x0200 => 'GPS',
+        0x0704 => 'GPS Lote',
+        0x0900 => 'Datos Extra',
+        0x8001 => 'ACK Servidor',
+        0x8100 => 'Registro OK',
+    ];
+
     public function handle()
     {
         set_time_limit(0);
@@ -30,9 +43,11 @@ class StartMdvrServer extends Command
         }
 
         socket_listen($socket);
-        $this->info('=====================================================');
-        $this->info("[SERVIDOR ROBUSTO] ESCUCHANDO EN PUERTO $port");
-        $this->info('=====================================================');
+        $this->newLine();
+        $this->info('╔═══════════════════════════════════════════════════╗');
+        $this->info('║     SERVIDOR MDVR JTT808 - Puerto '.str_pad($port, 5).'          ║');
+        $this->info('╚═══════════════════════════════════════════════════╝');
+        $this->newLine();
 
         $clients = [$socket];
         while (true) {
@@ -43,19 +58,18 @@ class StartMdvrServer extends Command
                     if ($s === $socket) {
                         $newSocket = socket_accept($socket);
                         $clients[] = $newSocket;
-                        // FIX PHP 8: Use spl_object_id instead of (int) cast
                         $this->clientBuffers[spl_object_id($newSocket)] = '';
-                        $this->warn('[CONN] Cámara conectada.');
+                        $this->info('🟢 <fg=green>CONECTADA</> Nueva cámara');
                     } else {
                         $input = @socket_read($s, 65535);
                         if ($input) {
                             $this->handleTcpStream($s, $input);
                         } else {
                             socket_close($s);
-                            // FIX PHP 8
                             unset($this->clientBuffers[spl_object_id($s)]);
                             unset($clients[array_search($s, $clients)]);
-                            $this->error('[DESC] Cámara desconectada.');
+                            $this->error('🔴 DESCONECTADA');
+                            $this->newLine();
                         }
                     }
                 }
@@ -63,34 +77,29 @@ class StartMdvrServer extends Command
         }
     }
 
+    private function getMsgName($msgId)
+    {
+        return $this->msgNames[$msgId] ?? sprintf('0x%04X', $msgId);
+    }
+
     private function handleTcpStream($socket, $input)
     {
-        // FIX PHP 8
         $id = spl_object_id($socket);
 
-        // Añadir lo nuevo al buffer que ya teníamos de esta cámara
         if (! isset($this->clientBuffers[$id])) {
             $this->clientBuffers[$id] = '';
         }
         $this->clientBuffers[$id] .= $input;
 
-        // Buscar paquetes completos delimitados por 0x7E
         while (($start = strpos($this->clientBuffers[$id], chr(0x7E))) !== false) {
-            // Buscar el final del paquete
             $end = strpos($this->clientBuffers[$id], chr(0x7E), $start + 1);
 
             if ($end === false) {
-                // El paquete está incompleto, esperamos a la siguiente lectura
                 break;
             }
 
-            // Extraer el paquete completo incluyendo los 7E
             $packet = substr($this->clientBuffers[$id], $start, $end - $start + 1);
-
-            // Eliminar lo procesado del buffer
             $this->clientBuffers[$id] = substr($this->clientBuffers[$id], $end + 1);
-
-            // Procesar el paquete único
             $this->parseSinglePacket($socket, $packet);
         }
     }
@@ -99,7 +108,6 @@ class StartMdvrServer extends Command
     {
         $bytes = array_values(unpack('C*', $packet));
 
-        // 1. Quitar los 7E y Unescape
         $payloadRaw = array_slice($bytes, 1, -1);
         $data = [];
         for ($i = 0; $i < count($payloadRaw); $i++) {
@@ -115,7 +123,6 @@ class StartMdvrServer extends Command
             return;
         }
 
-        // 2. Checksum
         $calcCs = 0;
         $receivedCs = array_pop($data);
         foreach ($data as $b) {
@@ -125,19 +132,19 @@ class StartMdvrServer extends Command
             return;
         }
 
-        // 3. Header y Respuesta
         $msgId = ($data[0] << 8) | $data[1];
-
-        // FIX 1: Capturar la versión del protocolo que envía la cámara (byte 4)
         $protoVer = $data[4];
-
         $phone = bin2hex(pack('C*', ...array_slice($data, 5, 10)));
         $devSerial = ($data[15] << 8) | $data[16];
         $body = array_slice($data, 17);
-
-        $this->info(sprintf('[MSG] ID: 0x%04X | Serial: %d | Phone: %s | ProtoVer: %d', $msgId, $devSerial, $phone, $protoVer));
-
         $phoneRaw = array_slice($data, 5, 10);
+
+        // LOG MEJORADO: Mensaje recibido
+        $msgName = $this->getMsgName($msgId);
+        $this->line(sprintf(
+            '   📥 <fg=yellow>%-15s</> #%-3d │ Tel: %s',
+            $msgName, $devSerial, substr($phone, -8)
+        ));
 
         if ($msgId === 0x0100) {
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body, $protoVer);
@@ -148,7 +155,6 @@ class StartMdvrServer extends Command
 
     private function respondRegistration($socket, $phoneRaw, $devSerial, $body, $protoVer)
     {
-        $this->info('   -> Procesando Registro...');
         $authCode = '123456';
         $responseBody = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x00];
         foreach (str_split($authCode) as $char) {
@@ -165,11 +171,7 @@ class StartMdvrServer extends Command
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body, $protoVer = 0x01)
     {
-        // FIX: Bit 14 (0x4000) = Bandera de Versión 2019
-        // Si protoVer es 1 (2019), activamos el bit para que la cámara sepa leer el byte extra
         $attr = ($protoVer === 1 ? 0x4000 : 0x0000) | count($body);
-
-        // FIX 1 (continuación): Usar la versión del protocolo que envió la cámara
         $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF, $protoVer];
 
         foreach ($phoneRaw as $b) {
@@ -202,12 +204,13 @@ class StartMdvrServer extends Command
         }
         $final[] = 0x7E;
 
-        // LOG: Mostrar qué estamos enviando como respuesta
-        $this->comment(sprintf('   <- REPLY 0x%04X to Serial %d', $msgId, ($body[0] << 8) | $body[1]));
+        // LOG MEJORADO: Respuesta enviada
+        $replyName = $this->getMsgName($msgId);
+        $this->line(sprintf('   📤 <fg=green>%-15s</> ✓', $replyName));
 
         $result = @socket_write($socket, pack('C*', ...$final));
         if ($result === false) {
-            $this->error('   [ERROR] socket_write falló: '.socket_strerror(socket_last_error($socket)));
+            $this->error('   ❌ Error enviando: '.socket_strerror(socket_last_error($socket)));
         }
     }
 }
