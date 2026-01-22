@@ -165,9 +165,9 @@ class StartMdvrServer extends Command
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body, $protoVer = 0x01)
     {
-        // FIX 2: Cambiar 0x4000 por 0x0000 (texto plano, sin cifrar)
-        // El bit 14 (0x4000) puede ser interpretado como "paquete encriptado" por algunas cámaras
-        $attr = 0x0000 | count($body);
+        // FIX: Bit 14 (0x4000) = Bandera de Versión 2019
+        // Si protoVer es 1 (2019), activamos el bit para que la cámara sepa leer el byte extra
+        $attr = ($protoVer === 1 ? 0x4000 : 0x0000) | count($body);
 
         // FIX 1 (continuación): Usar la versión del protocolo que envió la cámara
         $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF, $protoVer];
