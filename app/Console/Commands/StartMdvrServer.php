@@ -26,6 +26,7 @@ class StartMdvrServer extends Command
         socket_listen($socket);
         $this->info('=====================================================');
         $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port");
+        $this->info('[VERSION] LOG OPTIMIZED + AGGRESSIVE FILTERING (NO HEX DUMP FOR VIDEO)');
         $this->info('=====================================================');
 
         $clients = [$socket];
@@ -55,24 +56,23 @@ class StartMdvrServer extends Command
     private function processBuffer($socket, $input)
     {
         // --- VISUALIZACIÓN DE TRAMA ---
-        // Convertimos los datos binarios a Hexadecimal para debug.
-        $rawHex = strtoupper(bin2hex($input));
         // --- FILTRO DE TRAMAS (Optimización Agresiva de Logs) ---
         // El protocolo JTT808 SIEMPRE debe empezar con 0x7E.
         // El Stream de Video JTT1078 es binario crudo y NO empieza con 0x7E obligatoriamente.
         // Si no empieza con 0x7E, asumimos que es video y NO mostramos el Hex Dump para no saturar la terminal.
-        
+
         $firstByte = ord($input[0]);
         if ($firstByte !== 0x7E) {
             $len = strlen($input);
             $msg = "<fg=green>[VIDEO/BINARY STREAM]</>: Recibidos $len bytes.";
-            
+
             // Opcional: Si vemos la firma del video '01cd' (30 31 63 64) la destacamos
             if (strpos($input, "\x30\x31\x63\x64") !== false) {
-                $msg .= " <fg=cyan>(Firma JTT1078 detectada)</>";
+                $msg .= ' <fg=cyan>(Firma JTT1078 detectada)</>';
             }
-            
+
             $this->line($msg);
+
             return; // Detenemos procesamiento de este chunk
         }
 
@@ -255,7 +255,7 @@ class StartMdvrServer extends Command
         // En una implementación real, aquí usarías config('mdvr.server_ip') o similar.
         // Pero para esta prueba unificada, apuntamos todo al 8808.
 
-        $serverIp = '187.205.81.42'; 
+        $serverIp = '187.205.81.42';
         $videoPort = 8808;     // <--- CAMBIO: Solicitamos video al MISMO puerto de control
         $udpPort = 0;          // 0 = Usar TCP
         $channel = 1;          // Canal 1 (Cámara 1)
