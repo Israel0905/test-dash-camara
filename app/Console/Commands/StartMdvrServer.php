@@ -57,20 +57,26 @@ class StartMdvrServer extends Command
         // --- VISUALIZACIÓN DE TRAMA ---
         // Convertimos los datos binarios a Hexadecimal para debug.
         $rawHex = strtoupper(bin2hex($input));
-        // --- PRE-FILTRO DE VIDEO JTT1078 (Optimización de Logs) ---
-        // Verificamos si los primeros 4 bytes coinciden con el header de video (0x30 0x31 0x63 0x64)
-        // Esto evita convertir todo el binario a HEX si es video, ahorrando CPU y espacio en pantalla.
-        if (strlen($input) > 4) {
-            $header = substr($input, 0, 4);
-            if ($header === "\x30\x31\x63\x64") {
-                $len = strlen($input);
-                // Imprimimos solo una línea corta por paquete de video
-                $this->line("<fg=green>[VIDEO STREAM]</>: Recibidos $len bytes.");
-                return; // DETENEMOS el procesamiento aquí.
+        // --- FILTRO DE TRAMAS (Optimización Agresiva de Logs) ---
+        // El protocolo JTT808 SIEMPRE debe empezar con 0x7E.
+        // El Stream de Video JTT1078 es binario crudo y NO empieza con 0x7E obligatoriamente.
+        // Si no empieza con 0x7E, asumimos que es video y NO mostramos el Hex Dump para no saturar la terminal.
+        
+        $firstByte = ord($input[0]);
+        if ($firstByte !== 0x7E) {
+            $len = strlen($input);
+            $msg = "<fg=green>[VIDEO/BINARY STREAM]</>: Recibidos $len bytes.";
+            
+            // Opcional: Si vemos la firma del video '01cd' (30 31 63 64) la destacamos
+            if (strpos($input, "\x30\x31\x63\x64") !== false) {
+                $msg .= " <fg=cyan>(Firma JTT1078 detectada)</>";
             }
+            
+            $this->line($msg);
+            return; // Detenemos procesamiento de este chunk
         }
 
-        // --- VISUALIZACIÓN DE TRAMA DE CONTROL (Solo si NO es video) ---
+        // --- VISUALIZACIÓN DE TRAMA DE CONTROL (Solo si empiez con 0x7E) ---
         $rawHex = strtoupper(bin2hex($input));
         $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
