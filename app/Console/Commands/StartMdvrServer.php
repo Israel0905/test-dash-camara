@@ -207,41 +207,35 @@ class StartMdvrServer extends Command
         $this->line('   Plate: '.($plate ?: '(vacío)'));
 
         // =====================================================
-        // CONSTRUIR RESPUESTA 0x8100 (Estructura Final Corregida)
+        // CONSTRUCCIÓN DE LA RESPUESTA QUE SÍ FUNCIONÓ
         // =====================================================
-        // Usamos una contraseña simple de 6 dígitos
-        $authCode = '123456';  // Contraseña de sesión
+        $authCode = '123456';
 
         $this->info('   ─────────────────────────────────────────────────');
-        // CORRECCIÓN CRÍTICA DE PROTOCOLO (Basada en Tabla 3.1.2):
-        // El dispositivo espera que la respuesta de Registro siga la estructura de Respuesta General.
-        // Body Total: 11 bytes.
-        // ┌────────┬────────┬────────┬────────┬────────┬───────────────────────────┐
-        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3 │ Byte 4 │ Byte 5+                   │
-        // ├────────┼────────┼────────┼────────┼────────┼───────────────────────────┤
-        // │ Serial │ Serial │ Rep ID │ Rep ID │ Result │ Auth Code (STRING)        │
-        // │  High  │  Low   │  (01)  │  (00)  │  (00)  │ "123456"                  │
-        // └────────┴────────┴────────┴────────┴────────┴───────────────────────────┘
+        $this->info("   Auth Code a enviar: <fg=green>$authCode</> (longitud: ".strlen($authCode).')');
+
+        // ESTRUCTURA GANADORA (9 BYTES):
+        // ┌────────┬────────┬────────┬───────────────────────┐
+        // │ Byte 0 │ Byte 1 │ Byte 2 │ Byte 3+               │
+        // ├────────┼────────┼────────┼───────────────────────┤
+        // │ Serial │ Serial │ Result │ Auth Code             │
+        // │  High  │  Low   │  (00)  │ "123456"              │
+        // └────────┴────────┴────────┴───────────────────────┘
 
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Byte 0: Reply Serial High
-            $devSerial & 0xFF,          // Byte 1: Reply Serial Low
-
-            // --- FIX: Insertar Reply Message ID (0x0100) ---
-            0x01,                       // Byte 2: Reply ID High (01)
-            0x00,                       // Byte 3: Reply ID Low (00)
-
-            0x00,                       // Byte 4: Result = Éxito (0x00)
+            $devSerial & 0xFF,         // Byte 1: Reply Serial Low
+            0x00,                      // Byte 2: Resultado (0 = Éxito)
         ];
 
-        // Byte 5+: Auth Code como bytes ASCII (SIN byte de longitud)
+        // Byte 3 en adelante: Código DIRECTO (Sin padding, sin longitud, sin reply ID)
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
 
-        // Mostrar hex del body para debug
+        // Mostrar hex para confirmar que son 9 bytes (ej: 00 00 00 31 32 33 34 35 36)
         $bodyHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $responseBody));
-        $this->line("   Body HEX (Fix): <fg=magenta>$bodyHex</>");
+        $this->line("   Body HEX (Ganador): <fg=magenta>$bodyHex</>");
 
         $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
     }
