@@ -43,7 +43,8 @@ class StartMdvrServer extends Command
                     if ($s === $socket) {
                         $newSocket = socket_accept($socket);
                         $clients[] = $newSocket;
-                        $this->clientBuffers[(int) $newSocket] = ''; // Inicializar buffer
+                        // FIX PHP 8: Use spl_object_id instead of (int) cast
+                        $this->clientBuffers[spl_object_id($newSocket)] = '';
                         $this->warn('[CONN] Cámara conectada.');
                     } else {
                         $input = @socket_read($s, 65535);
@@ -51,7 +52,8 @@ class StartMdvrServer extends Command
                             $this->handleTcpStream($s, $input);
                         } else {
                             socket_close($s);
-                            unset($this->clientBuffers[(int) $s]);
+                            // FIX PHP 8
+                            unset($this->clientBuffers[spl_object_id($s)]);
                             unset($clients[array_search($s, $clients)]);
                             $this->error('[DESC] Cámara desconectada.');
                         }
@@ -63,8 +65,13 @@ class StartMdvrServer extends Command
 
     private function handleTcpStream($socket, $input)
     {
-        $id = (int) $socket;
+        // FIX PHP 8
+        $id = spl_object_id($socket);
+
         // Añadir lo nuevo al buffer que ya teníamos de esta cámara
+        if (! isset($this->clientBuffers[$id])) {
+            $this->clientBuffers[$id] = '';
+        }
         $this->clientBuffers[$id] .= $input;
 
         // Buscar paquetes completos delimitados por 0x7E
