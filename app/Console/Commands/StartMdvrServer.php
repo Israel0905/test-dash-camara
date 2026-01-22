@@ -202,6 +202,12 @@ class StartMdvrServer extends Command
         }
         $final[] = 0x7E;
 
-        @socket_write($socket, pack('C*', ...$final));
+        // LOG: Mostrar qué estamos enviando como respuesta
+        $this->comment(sprintf('   <- REPLY 0x%04X to Serial %d', $msgId, ($body[0] << 8) | $body[1]));
+
+        $result = @socket_write($socket, pack('C*', ...$final));
+        if ($result === false) {
+            $this->error('   [ERROR] socket_write falló: '.socket_strerror(socket_last_error($socket)));
+        }
     }
 }
