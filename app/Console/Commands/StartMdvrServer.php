@@ -12,10 +12,22 @@ class StartMdvrServer extends Command
 
     public function handle()
     {
+        // 1. Evitar que el script muera por tiempo
+        set_time_limit(0);
+
         $port = $this->option('port');
         $address = '0.0.0.0';
+
         $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+
+        // 2. Configuración Robusta del Socket
         socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
+
+        // CORRECCIÓN CRÍTICA: Desactivar el algoritmo de Nagle (TCP_NODELAY)
+        // Esto hace que las respuestas pequeñas (como el Latido) salgan INMEDIATAMENTE
+        // Si la constante no está definida, usa el valor 1.
+        $tcpNoDelay = defined('TCP_NODELAY') ? TCP_NODELAY : 1;
+        socket_set_option($socket, SOL_TCP, $tcpNoDelay, 1);
 
         if (! @socket_bind($socket, $address, $port)) {
             $this->error("Error: Puerto $port ocupado.");
@@ -25,23 +37,28 @@ class StartMdvrServer extends Command
 
         socket_listen($socket);
         $this->info('=====================================================');
-        $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port");
+        $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port (MODO TURBO)");
         $this->info('=====================================================');
 
         $clients = [$socket];
         while (true) {
             $read = $clients;
             $write = $except = null;
-            if (socket_select($read, $write, $except, 0, 1000000) > 0) {
+            if (socket_select($read, $write, $except, 0, 100000) > 0) { // Timeout reducido a 0.1s para más velocidad
                 foreach ($read as $s) {
                     if ($s === $socket) {
                         $clients[] = socket_accept($socket);
                         $this->warn('[CONN] Cámara conectada.');
                     } else {
-                        $input = @socket_read($s, 4096);
+                        // CORRECCIÓN CRÍTICA: Aumentar buffer de lectura
+                        // Los paquetes 0x0704 pueden ser enormes. 4096 es muy poco.
+                        // Subimos a 65535 bytes para tragar todo el paquete de una vez.
+                        $input = @socket_read($s, 65535);
+
                         if ($input) {
                             $this->processBuffer($s, $input);
                         } else {
+                            // Detectar desconexión real
                             socket_close($s);
                             unset($clients[array_search($s, $clients)]);
                             $this->error('[DESC] Cámara desconectada.');
