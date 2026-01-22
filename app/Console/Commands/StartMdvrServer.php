@@ -55,7 +55,7 @@ class StartMdvrServer extends Command
     private function processBuffer($socket, $input)
     {
         $rawHex = strtoupper(bin2hex($input));
-        $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
+        // $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
         $bytes = array_values(unpack('C*', $input));
 
@@ -232,8 +232,8 @@ class StartMdvrServer extends Command
         $this->info('   ┌─────────────────────────────────────────────────┐');
         $this->info('   │          PAQUETE DE RESPUESTA 0x'.sprintf('%04X', $msgId).'             │');
         $this->info('   └─────────────────────────────────────────────────┘');
-        $this->line('   <fg=white>HEADER ('.count($header)." bytes):</> <fg=blue>$headerHex</>");
-        $this->line('   <fg=white>BODY   ('.count($body)." bytes):</> <fg=magenta>$bodyHex</>");
+        // $this->line('   <fg=white>HEADER ('.count($header)." bytes):</> <fg=blue>$headerHex</>");
+        // $this->line('   <fg=white>BODY   ('.count($body)." bytes):</> <fg=magenta>$bodyHex</>");
 
         // Unir todo para el Checksum
         $full = array_merge($header, $body);
