@@ -202,54 +202,43 @@ class StartMdvrServer extends Command
     {
         $bodyLen = count($body);
 
-        // Atributos: Bit 14 ACTIVADO (0x4000) para indicar 2019
-        $attr = 0x4000 | $bodyLen;
+        // 1. Atributos: Bit 14 EN 1 (Versión 2019) y bits 0-9 longitud
+        // Tabla 2.2.2.1 [cite: 237, 239]
+        $attr = 0x4000 | ($bodyLen & 0x03FF);
 
+        // 2. Construcción del Header según Tabla 2.2.2 
         $header = [
             ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF, // ID Mensaje
+            ($msgId & 0xFF),       // Message ID (Byte 0-1)
             ($attr >> 8) & 0xFF,
-            ($attr & 0xFF), // Atributos con Bit 14
-            0x01,                                // Versión 2019 (Obligatorio)
+            ($attr & 0xFF),         // Properties (Byte 2-3)
+            0x01,                                        // Protocol Version (Byte 4) - OBLIGATORIO 2019
         ];
 
+        // Terminal Phone (Byte 5-14) - Debe ser exactamente 10 bytes 
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
-        // Serial del Servidor (Independiente)
+        // Server Serial Number (Byte 15-16)
         static $srvSerial = 1;
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
         $srvSerial = ($srvSerial + 1) % 65535;
 
-        // =====================================================
-        // DEBUG: Mostrar Header y Body por separado
-        // =====================================================
-        $headerHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $header));
-        $bodyHex = implode(' ', array_map(fn($b) => sprintf('%02X', $b), $body));
+        // 3. Unir Header + Body para Checksum
+        $fullPacket = array_merge($header, $body);
 
-        $this->info('   ┌─────────────────────────────────────────────────┐');
-        $this->info('   │          PAQUETE DE RESPUESTA 0x' . sprintf('%04X', $msgId) . '             │');
-        $this->info('   └─────────────────────────────────────────────────┘');
-        $this->line('   <fg=white>HEADER (' . count($header) . " bytes):</> <fg=blue>$headerHex</>");
-        $this->line('   <fg=white>BODY   (' . count($body) . " bytes):</> <fg=magenta>$bodyHex</>");
-
-        // Unir todo para el Checksum
-        $full = array_merge($header, $body);
-
-        // --- CÁLCULO XOR REAL ---
+        // 4. Calcular Checksum (XOR de todos los bytes del header y body) 
         $cs = 0;
-        foreach ($full as $byte) {
+        foreach ($fullPacket as $byte) {
             $cs ^= $byte;
         }
-        $full[] = $cs;
+        $fullPacket[] = $cs;
 
-        $this->line('   <fg=white>CHECKSUM:</> <fg=yellow>' . sprintf('%02X', $cs) . '</>');
-
-        // --- ESCAPADO ---
-        $final = [0x7E];
-        foreach ($full as $b) {
+        // 5. Escapado (Tabla 2.2.1) [cite: 224]
+        $final = [0x7E]; // Delimitador inicial
+        foreach ($fullPacket as $b) {
             if ($b === 0x7E) {
                 $final[] = 0x7D;
                 $final[] = 0x02;
@@ -260,14 +249,12 @@ class StartMdvrServer extends Command
                 $final[] = $b;
             }
         }
-        $final[] = 0x7E;
+        $final[] = 0x7E; // Delimitador final
 
-        $hexOut = strtoupper(bin2hex(pack('C*', ...$final)));
-        $this->line('<fg=green>[SEND HEX]</>: ' . implode(' ', str_split($hexOut, 2)));
-
-        @socket_write($socket, pack('C*', ...$final));
+        // Enviar
+        $binary = pack('C*', ...$final);
+        @socket_write($socket, $binary);
     }
-
     /**
      * Respuesta General del Servidor (Plataforma) -> Terminal
      * ID Mensaje: 0x8001
