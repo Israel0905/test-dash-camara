@@ -57,6 +57,19 @@ class StartMdvrServer extends Command
         // --- VISUALIZACIÓN DE TRAMA ---
         // Convertimos los datos binarios a Hexadecimal para debug.
         $rawHex = strtoupper(bin2hex($input));
+        // --- VISUALIZACIÓN DE TRAMA ---
+        // Convertimos los datos binarios a Hexadecimal para debug.
+        $rawHex = strtoupper(bin2hex($input));
+
+        // --- DETECCIÓN DE VIDEO JTT1078 ---
+        // El stream de video suele empezar con 30 31 63 64 (Frame Header).
+        // Si detectamos esto, solo avisamos y NO intentamos 'desescapar' ni parsear como JTT808.
+        if (str_starts_with($rawHex, '30316364')) {
+             $len = strlen($input);
+             $this->line("\n<fg=green>[VIDEO STREAM DETECTED]</>: Recibidos $len bytes de Video JTT1078.");
+             return; // DETENEMOS el procesamiento aquí para no llenar el log de errores.
+        }
+
         $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
         // Transformamos la cadena en un array de bytes (números) para procesarlos.
@@ -230,7 +243,12 @@ class StartMdvrServer extends Command
         // Indica al dispositivo que empiece a enviar video.
 
         $serverIp = '187.205.81.42'; // IP desde Screenshot del Dispositivo (Linked)
-        $videoPort = 8810;     // Puerto donde escucharemos el video (TCP)
+        // $serverIp = '187.205.81.42'; // IP desde Screenshot del Dispositivo (Linked) - MANTENER IP PÚBLICA
+        // En una implementación real, aquí usarías config('mdvr.server_ip') o similar.
+        // Pero para esta prueba unificada, apuntamos todo al 8808.
+
+        $serverIp = '187.205.81.42'; 
+        $videoPort = 8808;     // <--- CAMBIO: Solicitamos video al MISMO puerto de control
         $udpPort = 0;          // 0 = Usar TCP
         $channel = 1;          // Canal 1 (Cámara 1)
         $dataType = 0;         // 0 = AV, 1 = Video, 2 = Audio, 3 = Talk

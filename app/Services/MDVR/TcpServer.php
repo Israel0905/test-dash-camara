@@ -43,7 +43,7 @@ class TcpServer
         });
 
         $this->server->on('error', function (\Exception $e) {
-            $this->log('Server error: ' . $e->getMessage(), 'error');
+            $this->log('Server error: '.$e->getMessage(), 'error');
         });
 
         $this->log('MDVR Server started successfully!');
@@ -82,7 +82,7 @@ class TcpServer
 
         // Handle errors
         $connection->on('error', function (\Exception $e) use ($remoteAddress) {
-            $this->log("Connection error from {$remoteAddress}: " . $e->getMessage(), 'error');
+            $this->log("Connection error from {$remoteAddress}: ".$e->getMessage(), 'error');
         });
     }
 
@@ -100,7 +100,7 @@ class TcpServer
 
         // DEBUG: View incoming raw chunk
         $hexData = bin2hex($data);
-        echo "[DEBUG] Chunk received ({$connectionId}): {$hexData}" . PHP_EOL;
+        echo "[DEBUG] Chunk received ({$connectionId}): {$hexData}".PHP_EOL;
 
         // Process complete messages (between 0x7E delimiters)
         while (true) {
@@ -145,7 +145,7 @@ class TcpServer
     {
         $hexMessage = ProtocolHelper::bytesToHexString($rawBytes);
         $this->log("Received: {$hexMessage}");
-        echo "[DEBUG] Processing Message: {$hexMessage}" . PHP_EOL;
+        echo "[DEBUG] Processing Message: {$hexMessage}".PHP_EOL;
 
         // Parse message
         $message = ProtocolHelper::parseMessage($rawBytes);
@@ -188,10 +188,11 @@ class TcpServer
         // Flag connections that need authentication
         // Messages allowed without authentication: Reg (0x0100), Auth (0x0102), Heartbeat (0x0002)
         if (
-            !$this->connections[$connectionId]['authenticated']
-            && !in_array($messageId, [ProtocolHelper::MSG_REGISTRATION, ProtocolHelper::MSG_AUTHENTICATION, ProtocolHelper::MSG_HEARTBEAT])
+            ! $this->connections[$connectionId]['authenticated']
+            && ! in_array($messageId, [ProtocolHelper::MSG_REGISTRATION, ProtocolHelper::MSG_AUTHENTICATION, ProtocolHelper::MSG_HEARTBEAT])
         ) {
-            $this->log("Ignored message 0x" . sprintf('%04X', $messageId) . " from unauthenticated device", 'warning');
+            $this->log('Ignored message 0x'.sprintf('%04X', $messageId).' from unauthenticated device', 'warning');
+
             return;
         }
 
@@ -293,7 +294,7 @@ class TcpServer
 
         // Use raw phone bytes if available to ensure exact Terminal ID match
         if (isset($header['phoneNumberRaw'])) {
-            echo "Using raw phone bytes";
+            echo 'Using raw phone bytes';
             $response = $this->messageBuilder->buildRegistrationResponseWithRawPhone(
                 $header['phoneNumberRaw'],
                 $serialNumber, // Original msg serial (JTT808 requirement for Body)
@@ -301,14 +302,14 @@ class TcpServer
                 $authCode
             );
         } else {
-            echo "Using without raw phone number";
+            echo 'Using without raw phone number';
             $response = $this->messageBuilder->buildRegistrationResponse($phoneNumber, $serialNumber, 0, $authCode);
         }
 
         $this->sendResponse($connectionId, $response);
 
         $this->log("Registration successful - Auth code: {$authCode}");
-        echo "[DEBUG] 0x8100 Reply Serial: " . sprintf("%04X", $serialNumber) . " (Must match 0x0100 Serial)" . PHP_EOL;
+        echo '[DEBUG] 0x8100 Reply Serial: '.sprintf('%04X', $serialNumber).' (Must match 0x0100 Serial)'.PHP_EOL;
     }
 
     /**
@@ -321,10 +322,11 @@ class TcpServer
 
         if (empty($body)) {
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 2);
+
             return;
         }
 
-        // EXPLICACIÓN: En JTT808-2019, el authCode suele ser el cuerpo completo 
+        // EXPLICACIÓN: En JTT808-2019, el authCode suele ser el cuerpo completo
         // o el inicio del mismo. Intentamos leerlo de forma limpia:
         $authCode = trim(implode('', array_map('chr', $body)), "\x00");
 
@@ -335,8 +337,9 @@ class TcpServer
         $this->log("Auth - Recibido: {$authCode}, Esperado: {$expected}");
 
         if (! $isValid) {
-            $this->log("Authentication failed: Code mismatch", 'error');
+            $this->log('Authentication failed: Code mismatch', 'error');
             $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_AUTHENTICATION, 1);
+
             return;
         }
 
@@ -371,7 +374,7 @@ class TcpServer
         // Parse basic location info
         $location = ProtocolHelper::parseLocationBasicInfo($body);
 
-        $this->log("Location - Lat: {$location['latitude']}, Lng: {$location['longitude']}, Speed: {$location['speed']} km/h, ACC: " . ($location['accOn'] ? 'ON' : 'OFF'));
+        $this->log("Location - Lat: {$location['latitude']}, Lng: {$location['longitude']}, Speed: {$location['speed']} km/h, ACC: ".($location['accOn'] ? 'ON' : 'OFF'));
 
         // Parse additional info
         $additionalInfo = ProtocolHelper::parseLocationAdditionalInfo($body);
@@ -381,7 +384,7 @@ class TcpServer
         foreach ([ProtocolHelper::ADDINFO_ADAS_ALARM, ProtocolHelper::ADDINFO_DSM_ALARM, ProtocolHelper::ADDINFO_BSD_ALARM, ProtocolHelper::ADDINFO_AGGRESSIVE_DRIVING] as $alarmId) {
             if (isset($additionalInfo[$alarmId])) {
                 $aiAlarms[] = $additionalInfo[$alarmId];
-                $this->log('AI Alarm detected: ' . json_encode($additionalInfo[$alarmId]));
+                $this->log('AI Alarm detected: '.json_encode($additionalInfo[$alarmId]));
             }
         }
 
@@ -394,7 +397,7 @@ class TcpServer
         if (! empty($additionalInfo)) {
             foreach ($additionalInfo as $id => $info) {
                 if (! in_array($id, [ProtocolHelper::ADDINFO_ADAS_ALARM, ProtocolHelper::ADDINFO_DSM_ALARM, ProtocolHelper::ADDINFO_BSD_ALARM, ProtocolHelper::ADDINFO_AGGRESSIVE_DRIVING])) {
-                    $this->log("Additional Info [{$id}]: " . json_encode($info));
+                    $this->log("Additional Info [{$id}]: ".json_encode($info));
                 }
             }
         }
@@ -416,7 +419,7 @@ class TcpServer
         // Could send 0x9208 to request alarm attachments
         // For now, just log the alarms
         foreach ($alarms as $alarm) {
-            $this->log('AI Alarm: ' . json_encode($alarm));
+            $this->log('AI Alarm: '.json_encode($alarm));
             // TODO: Store alarm in database and optionally request attachment
         }
     }
@@ -479,7 +482,7 @@ class TcpServer
         $result = $body[4];
 
         $resultText = ['success', 'failure', 'message error', 'not supported'][$result] ?? 'unknown';
-        $this->log('Device response for 0x' . sprintf('%04X', $replyId) . " serial {$replySerial}: {$resultText}");
+        $this->log('Device response for 0x'.sprintf('%04X', $replyId)." serial {$replySerial}: {$resultText}");
     }
 
     /**
@@ -499,7 +502,7 @@ class TcpServer
         $messageType = $body[0];
         $data = array_slice($body, 1);
 
-        $this->log('Transparent data - Type: 0x' . sprintf('%02X', $messageType) . ', Length: ' . count($data));
+        $this->log('Transparent data - Type: 0x'.sprintf('%02X', $messageType).', Length: '.count($data));
 
         // Handle different transparent message types
         switch ($messageType) {
@@ -518,7 +521,7 @@ class TcpServer
                 break;
 
             default:
-                $this->log('Unknown transparent data type: 0x' . sprintf('%02X', $messageType));
+                $this->log('Unknown transparent data type: 0x'.sprintf('%02X', $messageType));
         }
 
         $this->sendGeneralResponse($connectionId, $phoneNumber, $serialNumber, ProtocolHelper::MSG_TRANSPARENT_DATA, 0);
@@ -613,7 +616,7 @@ class TcpServer
             return;
         }
 
-        // Como MessageBuilder ya entrega la trama con 7E y Escapada, 
+        // Como MessageBuilder ya entrega la trama con 7E y Escapada,
         // aquí solo la enviamos directamente.
         $hexResponse = ProtocolHelper::bytesToHexString($response);
         $this->log("Sending Physical: {$hexResponse}");
@@ -700,7 +703,7 @@ class TcpServer
         $timestamp = date('Y-m-d H:i:s');
         $formattedMessage = "[{$timestamp}] [MDVR] {$message}";
 
-        echo $formattedMessage . PHP_EOL;
+        echo $formattedMessage.PHP_EOL;
 
         if (config('mdvr.logging.enabled', true)) {
             Log::{$level}("[MDVR] {$message}");
