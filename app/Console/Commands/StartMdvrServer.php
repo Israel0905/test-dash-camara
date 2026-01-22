@@ -6,53 +6,90 @@ use Illuminate\Console\Command;
 
 class StartMdvrServer extends Command
 {
-    protected $signature = 'mdvr:start {--port=8808}';
-    protected $description = 'Servidor JT/T 808 para Ultravision N6 - Versión 2019';
+    protected $signature = 'mdvr:start {--port=8808} {--video-port=8810}';
+    protected $description = 'Servidor JT/T 808 Dual-Port para Ultravision N6';
 
     private $clientSerials = [];
+    private $portLabels = [];
 
     public function handle()
     {
-        $port = $this->option('port');
+        $commandPort = (int) $this->option('port');
+        $videoPort = (int) $this->option('video-port');
         $address = '0.0.0.0';
-        $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 
-        socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
-        socket_set_option($socket, SOL_SOCKET, SO_KEEPALIVE, 1);
+        // Crear socket para puerto de comandos (8808)
+        $commandSocket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        socket_set_option($commandSocket, SOL_SOCKET, SO_REUSEADDR, 1);
+        socket_set_option($commandSocket, SOL_SOCKET, SO_KEEPALIVE, 1);
 
-        if (!@socket_bind($socket, $address, $port)) {
-            $this->error("Error: Puerto $port ocupado.");
+        if (!@socket_bind($commandSocket, $address, $commandPort)) {
+            $this->error("Error: Puerto $commandPort ocupado.");
             return;
         }
+        socket_listen($commandSocket);
 
-        socket_listen($socket);
-        $this->info('=====================================================');
-        $this->info("[DEBUG MDVR] INICIADO EN PUERTO $port (PROTOCOLO 2019)");
-        $this->info('=====================================================');
+        // Crear socket para puerto de video (8810)
+        $videoSocket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        socket_set_option($videoSocket, SOL_SOCKET, SO_REUSEADDR, 1);
+        socket_set_option($videoSocket, SOL_SOCKET, SO_KEEPALIVE, 1);
 
-        $clients = [$socket];
+        if (!@socket_bind($videoSocket, $address, $videoPort)) {
+            $this->error("Error: Puerto $videoPort ocupado.");
+            return;
+        }
+        socket_listen($videoSocket);
+
+        // Guardar referencia de qué puerto es cada socket
+        $this->portLabels[spl_object_id($commandSocket)] = 'CMD';
+        $this->portLabels[spl_object_id($videoSocket)] = 'VIDEO';
+
+        $this->info('╔═══════════════════════════════════════════════════════╗');
+        $this->info('║        SERVIDOR MDVR DUAL-PORT (JTT808 2019)          ║');
+        $this->info('╠═══════════════════════════════════════════════════════╣');
+        $this->info("║  Puerto Comandos: $commandPort                              ║");
+        $this->info("║  Puerto Video:    $videoPort                              ║");
+        $this->info('╚═══════════════════════════════════════════════════════╝');
+
+        // Ambos sockets de escucha van al array de clientes
+        $clients = [$commandSocket, $videoSocket];
+        $servers = [$commandSocket, $videoSocket];
+
         while (true) {
             $read = $clients;
             $write = $except = null;
-            if (socket_select($read, $write, $except, 0, 1000000) > 0) {
+
+            if (socket_select($read, $write, $except, 0, 100000) > 0) {
                 foreach ($read as $s) {
-                    if ($s === $socket) {
-                        $newSocket = socket_accept($socket);
+                    // Si es uno de los sockets de servidor, aceptar nueva conexión
+                    if (in_array($s, $servers)) {
+                        $newSocket = socket_accept($s);
                         if ($newSocket) {
+                            socket_set_option($newSocket, SOL_SOCKET, SO_KEEPALIVE, 1);
                             $clients[] = $newSocket;
                             $this->clientSerials[spl_object_id($newSocket)] = 1;
-                            $this->warn("\n[CONN] Nueva cámara conectada IP: " . $this->getIp($newSocket));
+
+                            // Identificar de qué puerto viene
+                            $portType = ($s === $commandSocket) ? 'CMD' : 'VIDEO';
+                            $this->portLabels[spl_object_id($newSocket)] = $portType;
+
+                            $ip = $this->getIp($newSocket);
+                            $this->warn("\n[CONN:$portType] Nueva conexión desde $ip");
                         }
                     } else {
-                        $input = @socket_read($s, 8192);
+                        // Es un cliente existente, leer datos
+                        $input = @socket_read($s, 65535);
                         if ($input) {
                             $this->splitAndProcess($s, $input);
                         } else {
-                            unset($this->clientSerials[spl_object_id($s)]);
+                            $objId = spl_object_id($s);
+                            $portType = $this->portLabels[$objId] ?? '???';
+                            unset($this->clientSerials[$objId]);
+                            unset($this->portLabels[$objId]);
                             @socket_close($s);
                             $key = array_search($s, $clients);
                             if ($key !== false) unset($clients[$key]);
-                            $this->error('[DESC] Cámara desconectada.');
+                            $this->error("[DESC:$portType] Conexión cerrada.");
                         }
                     }
                 }
@@ -72,6 +109,8 @@ class StartMdvrServer extends Command
 
     private function processBuffer($socket, $input)
     {
+        $objId = spl_object_id($socket);
+        $portType = $this->portLabels[$objId] ?? '???';
         $rawHex = strtoupper(bin2hex($input));
         $bytes = array_values(unpack('C*', $input));
 
@@ -95,43 +134,44 @@ class StartMdvrServer extends Command
 
         // Estructura Header 2019
         $msgId = ($data[1] << 8) | $data[2];
-        $attr  = ($data[3] << 8) | $data[4];
-        $version = $data[5];
         $phoneRaw = array_slice($data, 6, 10);
         $phone = bin2hex(pack('C*', ...$phoneRaw));
         $devSerial = ($data[16] << 8) | $data[17];
 
-        $this->line("\n<fg=cyan>┌── [RECIBIDO] ───────────────────────────────────────────┐</>");
-        $this->line(sprintf("<fg=cyan>│</> MSG ID: 0x%04X | Serial: %d | Phone: %s", $msgId, $devSerial, $phone));
-        $this->line("<fg=cyan>│</> RAW: " . implode(' ', str_split($rawHex, 2)));
+        $this->line("\n<fg=cyan>[$portType] MSG 0x" . sprintf('%04X', $msgId) . " | Serial: $devSerial | Phone: $phone</>");
 
         switch ($msgId) {
             case 0x0100:
-                $this->info("│ ACCIÓN: Procesando Registro...");
-                $this->clientSerials[spl_object_id($socket)] = 1;
+                $this->info("   ↳ Registro - Respondiendo 0x8100");
+                $this->clientSerials[$objId] = 1;
                 $this->respondRegistration($socket, $phoneRaw, $devSerial);
                 break;
             case 0x0002:
-                $this->info("│ ACCIÓN: Heartbeat recibido.");
+                $this->info("   ↳ Heartbeat - Respondiendo 0x8001");
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                break;
+            case 0x0102:
+                $this->info("   ↳ Autenticación - Respondiendo 0x8001");
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                break;
+            case 0x0704:
+                $this->info("   ↳ GPS Batch - Respondiendo 0x8001");
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                break;
+            case 0x0900:
+                $this->info("   ↳ Data Passthrough - Respondiendo 0x8001");
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
             default:
-                $this->info("│ ACCIÓN: Respuesta General (0x8001)");
+                $this->comment("   ↳ Mensaje 0x" . sprintf('%04X', $msgId) . " - Respondiendo 0x8001");
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
         }
-        $this->line("<fg=cyan>└──────────────────────────────────────────────────────────┘</>");
     }
 
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
         $authCode = '123456';
-
-        // CORRECCIÓN ESTRUCTURAL 2019:
-        // Byte 0-1: Serial del mensaje original (2 bytes)
-        // Byte 2: Resultado (1 byte: 0=éxito, 1=ya registrado, 2=no en terminal, 3=terminal llena, 4=error)
-        // Byte 3-N: Código de autenticación (String)
-
         $responseBody = [
             ($devSerial >> 8) & 0xFF,
             ($devSerial & 0xFF),
@@ -142,7 +182,6 @@ class StartMdvrServer extends Command
             $responseBody[] = ord($char);
         }
 
-        $this->line("<fg=yellow>│</> Registrando cámara con Serial de origen: $devSerial");
         $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
     }
 
@@ -162,16 +201,17 @@ class StartMdvrServer extends Command
     {
         $objId = spl_object_id($socket);
         $srvSerial = $this->clientSerials[$objId] ?? 1;
+        $portType = $this->portLabels[$objId] ?? '???';
 
         $bodyLen = count($body);
-        $attr = 0x4000 | ($bodyLen & 0x03FF); // Bit 14 for 2019
+        $attr = 0x4000 | ($bodyLen & 0x03FF);
 
         $header = [
             ($msgId >> 8) & 0xFF,
             ($msgId & 0xFF),
             ($attr >> 8) & 0xFF,
             ($attr & 0xFF),
-            0x01, // Version
+            0x01,
         ];
         foreach ($phoneRaw as $b) {
             $header[] = $b;
@@ -181,14 +221,12 @@ class StartMdvrServer extends Command
 
         $full = array_merge($header, $body);
 
-        // Checksum
         $cs = 0;
         foreach ($full as $byte) {
             $cs ^= $byte;
         }
         $full[] = $cs;
 
-        // Escape
         $final = [0x7E];
         foreach ($full as $b) {
             if ($b === 0x7E) {
@@ -206,9 +244,7 @@ class StartMdvrServer extends Command
         $binOut = pack('C*', ...$final);
         @socket_write($socket, $binOut);
 
-        // LOG DE SALIDA
-        $this->line("<fg=green>│ [ENVIADO]</> ID: 0x" . sprintf('%04X', $msgId) . " | SrvSerial: $srvSerial");
-        $this->line("<fg=green>│ HEX:</> " . strtoupper(bin2hex($binOut)));
+        $this->line("<fg=green>   ← [$portType] REPLY 0x" . sprintf('%04X', $msgId) . " | SrvSerial: $srvSerial</>");
 
         $this->clientSerials[$objId] = ($srvSerial + 1) % 65535;
     }
@@ -216,6 +252,6 @@ class StartMdvrServer extends Command
     private function getIp($socket)
     {
         socket_getpeername($socket, $address);
-        return $address;
+        return $address ?? 'unknown';
     }
 }
