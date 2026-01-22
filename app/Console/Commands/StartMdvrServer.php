@@ -52,7 +52,8 @@ class StartMdvrServer extends Command
 
                         $clients[] = $newSocket;
                         $this->clientBuffers[spl_object_id($newSocket)] = '';
-                        $this->warn('[CONN] Cámara conectada.');
+                        $connectedCount = count($clients) - 1; // -1 porque clients incluye el socket principal
+                        $this->warn("[CONN] Cámara conectada. (Total: $connectedCount)");
                     } else {
                         $input = @socket_read($s, 65535);
                         if ($input) {
@@ -61,7 +62,8 @@ class StartMdvrServer extends Command
                             socket_close($s);
                             unset($this->clientBuffers[spl_object_id($s)]);
                             unset($clients[array_search($s, $clients)]);
-                            $this->error('[DESC] Cámara desconectada. Socket ID: '.spl_object_id($s));
+                            $connectedCount = count($clients) - 1;
+                            $this->error('[DESC] Cámara desconectada. Socket ID: '.spl_object_id($s)." (Total: $connectedCount)");
                         }
                     }
                 }
@@ -157,10 +159,16 @@ class StartMdvrServer extends Command
     private function respondRegistration($socket, $phoneRaw, $devSerial, $body, $protoVer)
     {
         $authCode = '123456';
-        $responseBody = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x00];
+
+        // CAMBIO FINAL: Usamos 0x01 (Vehículo ya registrado)
+        // Esto es lo que mejor funciona para reconexiones automáticas en cámaras N62.
+        $responseBody = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x01];
+
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
+
+        $this->info("   <- REPLY 0x8100 (Ya Registrado - 0x01) to Serial $devSerial");
         $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody, $protoVer);
     }
 
