@@ -126,15 +126,23 @@ class StartMdvrServer extends Command
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
         $authCode = '123456';
+
+        // CORRECCIÓN ESTRUCTURAL 2019:
+        // Byte 0-1: Serial del mensaje original (2 bytes)
+        // Byte 2: Resultado (1 byte: 0=éxito, 1=ya registrado, 2=no en terminal, 3=terminal llena, 4=error)
+        // Byte 3-N: Código de autenticación (String)
+
         $responseBody = [
             ($devSerial >> 8) & 0xFF,
-            $devSerial & 0xFF,
-            0x00, // Resultado 0 = Éxito
+            ($devSerial & 0xFF),
+            0x00, // RESULTADO: ÉXITO
         ];
+
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
 
+        $this->line("<fg=yellow>│</> Registrando cámara con Serial de origen: $devSerial");
         $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
     }
 
