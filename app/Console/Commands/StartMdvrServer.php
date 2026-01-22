@@ -23,6 +23,9 @@ class StartMdvrServer extends Command
         $tcpNoDelay = defined('TCP_NODELAY') ? TCP_NODELAY : 1;
         socket_set_option($socket, SOL_TCP, $tcpNoDelay, 1);
 
+        // Keep-Alive en el socket principal
+        socket_set_option($socket, SOL_SOCKET, SO_KEEPALIVE, 1);
+
         if (! @socket_bind($socket, '0.0.0.0', $port)) {
             $this->error("Error: Puerto $port ocupado.");
 
@@ -58,7 +61,7 @@ class StartMdvrServer extends Command
                             socket_close($s);
                             unset($this->clientBuffers[spl_object_id($s)]);
                             unset($clients[array_search($s, $clients)]);
-                            $this->error('[DESC] Cámara desconectada.');
+                            $this->error('[DESC] Cámara desconectada. Socket ID: '.spl_object_id($s));
                         }
                     }
                 }
