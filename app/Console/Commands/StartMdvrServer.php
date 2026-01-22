@@ -77,30 +77,8 @@ class StartMdvrServer extends Command
         }
 
         // --- VISUALIZACIÓN DE TRAMA DE CONTROL (Solo si empiez con 0x7E) ---
-        $len = strlen($input);
-
-        // Si el paquete es muy grande (> 500 bytes), es probable que sea Data/Video encapsulado.
-        // Lo resumimos para no inundar la terminal.
-        if ($len > 500) {
-            // Intentamos extraer el ID para dar un log útil
-            $bytes = array_values(unpack('C*', substr($input, 0, 10)));
-            // Si hay suficientes bytes y parece JTT808 (byte[0]=7E)
-            if (count($bytes) > 3 && $bytes[0] === 0x7E) {
-                // Des-escapar básico solo del ID para mostrarlo
-                $msgIdHigh = $bytes[1];
-                $msgIdLow = $bytes[2];
-                // Nota: esto es aproximado porque no hacemos unescape completo aquí,
-                // pero sirve para identificar el tipo de paquete "gordo".
-                $approxId = sprintf('%02X%02X', $msgIdHigh, $msgIdLow);
-                $this->line("\n<fg=magenta>[RAW RECV (LARGE)]: Tramas de $len bytes. ID aprox: 0x$approxId. (Hex oculto)</>");
-            } else {
-                $this->line("\n<fg=magenta>[RAW RECV (LARGE)]: Tramas de $len bytes. (Hex oculto)</>");
-            }
-        } else {
-            // Solo mostramos el HEX si es un mensaje de control razonable ("corto")
-            $rawHex = strtoupper(bin2hex($input));
-            $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
-        }
+        $rawHex = strtoupper(bin2hex($input));
+        $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
         // Transformamos la cadena en un array de bytes (números) para procesarlos.
         $bytes = array_values(unpack('C*', $input));
