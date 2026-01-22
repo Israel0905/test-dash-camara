@@ -7,7 +7,6 @@ use Illuminate\Console\Command;
 class StartMdvrServer extends Command
 {
     protected $signature = 'mdvr:start {--port=8808}';
-
     protected $description = 'Servidor JT/T 808 para Ultravision N6 - Versión 2019';
 
     public function handle()
@@ -17,9 +16,8 @@ class StartMdvrServer extends Command
         $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
 
-        if (! @socket_bind($socket, $address, $port)) {
+        if (!@socket_bind($socket, $address, $port)) {
             $this->error("Error: Puerto $port ocupado.");
-
             return;
         }
 
@@ -70,14 +68,14 @@ class StartMdvrServer extends Command
                 $this->processBuffer($socket, hex2bin($packetHex));
             }
         } else {
-            $this->error('[ERROR] Datos malformados recibidos (Sin delimitadores 7E)');
+            $this->error("[ERROR] Datos malformados recibidos (Sin delimitadores 7E)");
         }
     }
 
     private function processBuffer($socket, $input)
     {
         $rawHex = strtoupper(bin2hex($input));
-        $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
+        $this->line("\n<fg=yellow>[RAW RECV]</>: " . implode(' ', str_split($rawHex, 2)));
 
         $bytes = array_values(unpack('C*', $input));
 
@@ -97,9 +95,7 @@ class StartMdvrServer extends Command
             }
         }
 
-        if (count($data) < 15) {
-            return;
-        }
+        if (count($data) < 15) return;
 
         // Payload sin delimitadores 7E ni checksum
         $payload = array_slice($data, 1, -2);
@@ -140,7 +136,7 @@ class StartMdvrServer extends Command
                 break;
 
             default:
-                $this->comment('   -> Enviando Respuesta General (0x8001) para ID: 0x'.sprintf('%04X', $msgId));
+                $this->comment("   -> Enviando Respuesta General (0x8001) para ID: 0x" . sprintf('%04X', $msgId));
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
         }
@@ -152,7 +148,7 @@ class StartMdvrServer extends Command
         $responseBody = [
             ($devSerial >> 8) & 0xFF,
             $devSerial & 0xFF,
-            0x01, // Ya Registrado (0x01)
+            0x00, // Resultado: Éxito
         ];
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
@@ -220,7 +216,7 @@ class StartMdvrServer extends Command
         $final[] = 0x7E;
 
         $hexOut = strtoupper(bin2hex(pack('C*', ...$final)));
-        $this->line('<fg=green>[SEND HEX]</>: '.implode(' ', str_split($hexOut, 2)));
+        $this->line('<fg=green>[SEND HEX]</>: ' . implode(' ', str_split($hexOut, 2)));
 
         @socket_write($socket, pack('C*', ...$final));
     }
