@@ -136,8 +136,13 @@ class StartMdvrServer extends Command
             $this->comment('   -> Procesando Autenticación...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $protoVer);
 
-            // Enviar hora inmediatamente después de auth
+            // Paso A: Sincronizar Hora
+            usleep(50000); // 50ms pausa
             $this->sendServerTime($socket, $phoneRaw, $protoVer);
+
+            // Paso B: Configurar Intervalo de Latidos (CRÍTICO para mantener conexión)
+            usleep(50000); // 50ms pausa
+            $this->sendHeartbeatInterval($socket, $phoneRaw, $protoVer);
 
         } else {
             // 3. CUALQUIER OTRO MENSAJE (Heartbeat, GPS, Alarmas)
@@ -177,6 +182,42 @@ class StartMdvrServer extends Command
         // Log para verificar que enviamos lo correcto (formato BCD sin guiones)
         $this->info('   -> [SYNC] Enviando Hora BCD (0x8004): '.$dateStr);
         $this->sendPacket($socket, 0x8004, $phoneRaw, $body, $protoVer);
+    }
+
+    /**
+     * Envía configuración de intervalo de latido al dispositivo (0x8103)
+     * Esto es CRÍTICO para que la cámara no se reinicie
+     */
+    private function sendHeartbeatInterval($socket, $phoneRaw, $protoVer)
+    {
+        // MENSAJE 0x8103: Configurar Parámetros del Terminal
+        // Vamos a configurar el ID 0x0001 (Intervalo de Heartbeat)
+
+        $paramId = 0x00000001; // ID del parámetro (Heartbeat)
+        $paramLen = 4;         // Longitud del valor (4 bytes entero)
+        $value = 45;           // Valor: 45 segundos
+
+        $body = [
+            1, // Número de parámetros que vamos a configurar (solo 1)
+        ];
+
+        // Agregamos el ID del Parametro (4 bytes)
+        $body[] = ($paramId >> 24) & 0xFF;
+        $body[] = ($paramId >> 16) & 0xFF;
+        $body[] = ($paramId >> 8) & 0xFF;
+        $body[] = $paramId & 0xFF;
+
+        // Agregamos la longitud (1 byte)
+        $body[] = $paramLen;
+
+        // Agregamos el valor (4 bytes)
+        $body[] = ($value >> 24) & 0xFF;
+        $body[] = ($value >> 16) & 0xFF;
+        $body[] = ($value >> 8) & 0xFF;
+        $body[] = $value & 0xFF;
+
+        $this->info('   -> [CFG] Enviando Configuración de Latido (45s) - 0x8103');
+        $this->sendPacket($socket, 0x8103, $phoneRaw, $body, $protoVer);
     }
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body, $protoVer = 0x01)
