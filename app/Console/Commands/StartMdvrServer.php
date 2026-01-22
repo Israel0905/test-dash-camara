@@ -57,19 +57,21 @@ class StartMdvrServer extends Command
         // --- VISUALIZACIÓN DE TRAMA ---
         // Convertimos los datos binarios a Hexadecimal para debug.
         $rawHex = strtoupper(bin2hex($input));
-        // --- VISUALIZACIÓN DE TRAMA ---
-        // Convertimos los datos binarios a Hexadecimal para debug.
-        $rawHex = strtoupper(bin2hex($input));
-
-        // --- DETECCIÓN DE VIDEO JTT1078 ---
-        // El stream de video suele empezar con 30 31 63 64 (Frame Header).
-        // Si detectamos esto, solo avisamos y NO intentamos 'desescapar' ni parsear como JTT808.
-        if (str_starts_with($rawHex, '30316364')) {
-             $len = strlen($input);
-             $this->line("\n<fg=green>[VIDEO STREAM DETECTED]</>: Recibidos $len bytes de Video JTT1078.");
-             return; // DETENEMOS el procesamiento aquí para no llenar el log de errores.
+        // --- PRE-FILTRO DE VIDEO JTT1078 (Optimización de Logs) ---
+        // Verificamos si los primeros 4 bytes coinciden con el header de video (0x30 0x31 0x63 0x64)
+        // Esto evita convertir todo el binario a HEX si es video, ahorrando CPU y espacio en pantalla.
+        if (strlen($input) > 4) {
+            $header = substr($input, 0, 4);
+            if ($header === "\x30\x31\x63\x64") {
+                $len = strlen($input);
+                // Imprimimos solo una línea corta por paquete de video
+                $this->line("<fg=green>[VIDEO STREAM]</>: Recibidos $len bytes.");
+                return; // DETENEMOS el procesamiento aquí.
+            }
         }
 
+        // --- VISUALIZACIÓN DE TRAMA DE CONTROL (Solo si NO es video) ---
+        $rawHex = strtoupper(bin2hex($input));
         $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
         // Transformamos la cadena en un array de bytes (números) para procesarlos.
