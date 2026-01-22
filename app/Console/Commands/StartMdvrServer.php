@@ -110,6 +110,18 @@ class StartMdvrServer extends Command
         if ($msgId === 0x0100) {
             $this->comment('   -> Procesando Registro...');
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
+        } elseif ($msgId === 0x0102) {
+            // AUTENTICACIÓN - Responder y enviar configuración
+            $this->comment('   -> Procesando Autenticación...');
+            $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+
+            // Enviar Time Sync para mantener conexión
+            usleep(50000);
+            $this->sendTimeSync($socket, $phoneRaw);
+
+            // Enviar Heartbeat Config
+            usleep(50000);
+            $this->sendHeartbeatConfig($socket, $phoneRaw);
         } else {
             $this->comment('   -> Enviando Respuesta General (0x8001)...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
@@ -289,5 +301,50 @@ class StartMdvrServer extends Command
 
         $this->comment('   -> Confirmando mensaje 0x'.sprintf('%04X', $replyMsgId));
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+    }
+
+    /**
+     * Envía sincronización de hora al terminal (0x8004)
+     */
+    private function sendTimeSync($socket, $phoneRaw)
+    {
+        $dateStr = date('ymdHis'); // Formato BCD: AAMMDDHHMMSS
+        $body = [];
+        foreach (str_split($dateStr, 2) as $part) {
+            $body[] = hexdec($part);
+        }
+
+        $this->info('   -> [SYNC] Enviando hora: '.date('Y-m-d H:i:s'));
+        $this->sendPacket($socket, 0x8004, $phoneRaw, $body);
+    }
+
+    /**
+     * Envía configuración de intervalo de heartbeat (0x8103)
+     */
+    private function sendHeartbeatConfig($socket, $phoneRaw)
+    {
+        $paramId = 0x00000001; // ID: Heartbeat Interval
+        $paramLen = 4;
+        $value = 60; // 60 segundos
+
+        $body = [1]; // Número de parámetros
+
+        // ID del parámetro (4 bytes)
+        $body[] = ($paramId >> 24) & 0xFF;
+        $body[] = ($paramId >> 16) & 0xFF;
+        $body[] = ($paramId >> 8) & 0xFF;
+        $body[] = $paramId & 0xFF;
+
+        // Longitud (1 byte)
+        $body[] = $paramLen;
+
+        // Valor (4 bytes)
+        $body[] = ($value >> 24) & 0xFF;
+        $body[] = ($value >> 16) & 0xFF;
+        $body[] = ($value >> 8) & 0xFF;
+        $body[] = $value & 0xFF;
+
+        $this->info('   -> [CFG] Enviando Heartbeat Interval: '.$value.'s');
+        $this->sendPacket($socket, 0x8103, $phoneRaw, $body);
     }
 }
