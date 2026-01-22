@@ -9,7 +9,7 @@ class StartMdvrServer extends Command
     protected $signature = 'mdvr:start {--port=8808}';
     protected $description = 'Servidor JT/T 808 para Ultravision N6 - Versión 2019';
 
-    // Propiedad para rastrear el serial por cada socket conectado
+    // Almacena el número de secuencia (serial) independiente para cada conexión
     private $clientSerials = [];
 
     public function handle()
@@ -37,19 +37,22 @@ class StartMdvrServer extends Command
                 foreach ($read as $s) {
                     if ($s === $socket) {
                         $newSocket = socket_accept($socket);
-                        $clients[] = $newSocket;
-                        // Inicializamos el serial para esta nueva conexión
-                        $this->clientSerials[(int)$newSocket] = 1;
-                        $this->warn('[CONN] Cámara conectada.');
+                        if ($newSocket) {
+                            $clients[] = $newSocket;
+                            // Inicializar serial para el nuevo objeto Socket
+                            $this->clientSerials[spl_object_id($newSocket)] = 1;
+                            $this->warn('[CONN] Cámara conectada.');
+                        }
                     } else {
                         $input = @socket_read($s, 8192);
                         if ($input) {
                             $this->splitAndProcess($s, $input);
                         } else {
-                            // Limpiamos el serial al desconectar
-                            unset($this->clientSerials[(int)$s]);
+                            // Limpieza al desconectar
+                            unset($this->clientSerials[spl_object_id($s)]);
                             @socket_close($s);
-                            unset($clients[array_search($s, $clients)]);
+                            $key = array_search($s, $clients);
+                            if ($key !== false) unset($clients[$key]);
                             $this->error('[DESC] Cámara desconectada.');
                         }
                     }
@@ -100,7 +103,6 @@ class StartMdvrServer extends Command
         if (count($data) < 15) return;
 
         $payload = array_slice($data, 1, -2);
-
         $msgId = ($payload[0] << 8) | $payload[1];
         $attr = ($payload[2] << 8) | $payload[3];
 
@@ -119,8 +121,8 @@ class StartMdvrServer extends Command
         switch ($msgId) {
             case 0x0100: // Registro
                 $this->comment('   -> Procesando Registro (0x0100)...');
-                // IMPORTANTE: Al ser un registro nuevo, reiniciamos el serial del servidor para este socket
-                $this->clientSerials[(int)$socket] = 1;
+                // Al recibir registro, reiniciamos el contador de respuestas para este socket
+                $this->clientSerials[spl_object_id($socket)] = 1;
                 $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
                 break;
 
@@ -173,15 +175,16 @@ class StartMdvrServer extends Command
         $bodyLen = count($body);
         $attr = 0x4000 | ($bodyLen & 0x03FF);
 
-        // Obtenemos el serial actual para este socket (por defecto 1)
-        $srvSerial = $this->clientSerials[(int)$socket] ?? 1;
+        // Recuperar el ID del objeto socket para buscar su serial
+        $objId = spl_object_id($socket);
+        $srvSerial = $this->clientSerials[$objId] ?? 1;
 
         $header = [
             ($msgId >> 8) & 0xFF,
             ($msgId & 0xFF),
             ($attr >> 8) & 0xFF,
             ($attr & 0xFF),
-            0x01,
+            0x01, // Protocol Version 2019
         ];
 
         foreach ($phoneRaw as $b) {
@@ -218,7 +221,7 @@ class StartMdvrServer extends Command
 
         @socket_write($socket, $binOut);
 
-        // Incrementamos el serial para el próximo paquete de este cliente
-        $this->clientSerials[(int)$socket] = ($srvSerial + 1) % 65535;
+        // Incrementar el serial específico de este cliente para el siguiente envío
+        $this->clientSerials[$objId] = ($srvSerial + 1) % 65535;
     }
 }
