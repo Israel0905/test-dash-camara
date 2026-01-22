@@ -9,7 +9,6 @@ class StartMdvrServer extends Command
     protected $signature = 'mdvr:start {--port=8808}';
     protected $description = 'Servidor JT/T 808 para Ultravision N6 - Versión 2019';
 
-    // Almacena el número de secuencia (serial) independiente para cada conexión
     private $clientSerials = [];
 
     public function handle()
@@ -17,7 +16,10 @@ class StartMdvrServer extends Command
         $port = $this->option('port');
         $address = '0.0.0.0';
         $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+
+        // CORRECCIÓN: Configuración de Keep-Alive para Ubuntu Server
         socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
+        socket_set_option($socket, SOL_SOCKET, SO_KEEPALIVE, 1);
 
         if (!@socket_bind($socket, $address, $port)) {
             $this->error("Error: Puerto $port ocupado.");
@@ -39,7 +41,6 @@ class StartMdvrServer extends Command
                         $newSocket = socket_accept($socket);
                         if ($newSocket) {
                             $clients[] = $newSocket;
-                            // Inicializar serial para el nuevo objeto Socket
                             $this->clientSerials[spl_object_id($newSocket)] = 1;
                             $this->warn('[CONN] Cámara conectada.');
                         }
@@ -48,7 +49,6 @@ class StartMdvrServer extends Command
                         if ($input) {
                             $this->splitAndProcess($s, $input);
                         } else {
-                            // Limpieza al desconectar
                             unset($this->clientSerials[spl_object_id($s)]);
                             @socket_close($s);
                             $key = array_search($s, $clients);
@@ -65,26 +65,15 @@ class StartMdvrServer extends Command
     {
         $hex = bin2hex($input);
         if (preg_match_all('/7e(..*?)7e/', $hex, $matches)) {
-            $count = count($matches[0]);
-            if ($count > 1) {
-                $this->warn("[BUFFER] Se detectaron $count paquetes pegados. Procesando uno a uno...");
-            }
-
             foreach ($matches[0] as $packetHex) {
                 $this->processBuffer($socket, hex2bin($packetHex));
             }
-        } else {
-            $this->error("[ERROR] Datos malformados recibidos (Sin delimitadores 7E)");
         }
     }
 
     private function processBuffer($socket, $input)
     {
-        $rawHex = strtoupper(bin2hex($input));
-        $this->line("\n<fg=yellow>[RAW RECV]</>: " . implode(' ', str_split($rawHex, 2)));
-
         $bytes = array_values(unpack('C*', $input));
-
         $data = [];
         for ($i = 0; $i < count($bytes); $i++) {
             if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
@@ -104,50 +93,34 @@ class StartMdvrServer extends Command
 
         $payload = array_slice($data, 1, -2);
         $msgId = ($payload[0] << 8) | $payload[1];
-        $attr = ($payload[2] << 8) | $payload[3];
 
+        // CORRECCIÓN: El número de teléfono en 2019 ocupa 10 bytes (BCD)
         $phoneRaw = array_slice($payload, 5, 10);
-        $phone = bin2hex(pack('C*', ...$phoneRaw));
         $devSerial = ($payload[15] << 8) | $payload[16];
-        $body = array_slice($payload, 17);
-
-        $this->info(sprintf(
-            '[MSG] 0x%04X | Serial Cam: %d | Phone: %s',
-            $msgId,
-            $devSerial,
-            $phone
-        ));
 
         switch ($msgId) {
             case 0x0100: // Registro
                 $this->comment('   -> Procesando Registro (0x0100)...');
-                // Al recibir registro, reiniciamos el contador de respuestas para este socket
                 $this->clientSerials[spl_object_id($socket)] = 1;
-                $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
+                $this->respondRegistration($socket, $phoneRaw, $devSerial);
                 break;
 
-            case 0x0002: // Heartbeat
-                $this->info('   -> [HEARTBEAT] Confirmando...');
-                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                break;
-
-            case 0x0704: // Batch Location
-                $this->info('   -> [BATCH LOCATION] Recibido lote de posiciones.');
+            case 0x0102: // Autenticación (Mensaje que sigue al registro exitoso)
+                $this->info('   -> [AUTH] Cámara autenticándose...');
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
 
             default:
-                $this->comment("   -> Enviando Respuesta General (0x8001) para ID: 0x" . sprintf('%04X', $msgId));
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
         }
     }
 
-    private function respondRegistration($socket, $phoneRaw, $devSerial, $body)
+    private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
         $authCode = '123456';
         $responseBody = [
-            ($devSerial >> 8) & 0xFF,
+            ($devSerial >> 8) & 0xFF, // Responde al Serial de la cámara
             $devSerial & 0xFF,
             0x00, // Resultado: Éxito
         ];
@@ -161,11 +134,11 @@ class StartMdvrServer extends Command
     private function respondGeneral($socket, $phoneRaw, $devSerial, $replyMsgId)
     {
         $body = [
-            ($devSerial >> 8) & 0xFF,
+            ($devSerial >> 8) & 0xFF, // Serial del mensaje que respondes
             $devSerial & 0xFF,
-            ($replyMsgId >> 8) & 0xFF,
+            ($replyMsgId >> 8) & 0xFF, // ID del mensaje que respondes
             $replyMsgId & 0xFF,
-            0x00, // OK
+            0x00, // Resultado: OK
         ];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
@@ -173,9 +146,9 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
+        // Atributo 2019: Bit 14 en 1 (0x4000)
         $attr = 0x4000 | ($bodyLen & 0x03FF);
 
-        // Recuperar el ID del objeto socket para buscar su serial
         $objId = spl_object_id($socket);
         $srvSerial = $this->clientSerials[$objId] ?? 1;
 
@@ -184,7 +157,7 @@ class StartMdvrServer extends Command
             ($msgId & 0xFF),
             ($attr >> 8) & 0xFF,
             ($attr & 0xFF),
-            0x01, // Protocol Version 2019
+            0x01, // Protocol Version 2019 obligatorio
         ];
 
         foreach ($phoneRaw as $b) {
@@ -217,11 +190,8 @@ class StartMdvrServer extends Command
         $final[] = 0x7E;
 
         $binOut = pack('C*', ...$final);
-        $this->line('<fg=green>[SEND HEX]</>: ' . strtoupper(bin2hex($binOut)) . " (SrvSerial: $srvSerial)");
-
         @socket_write($socket, $binOut);
 
-        // Incrementar el serial específico de este cliente para el siguiente envío
         $this->clientSerials[$objId] = ($srvSerial + 1) % 65535;
     }
 }
