@@ -13,20 +13,6 @@ class StartMdvrServer extends Command
     // Buffers para guardar fragmentos de cada cámara
     private $clientBuffers = [];
 
-    // Nombres descriptivos de los mensajes JTT808
-    private $msgNames = [
-        0x0001 => 'ACK Terminal',
-        0x0002 => 'Heartbeat',
-        0x0100 => 'Registro',
-        0x0102 => 'Autenticación',
-        0x0200 => 'GPS',
-        0x0704 => 'GPS Lote',
-        0x0900 => 'Datos Extra',
-        0x8001 => 'ACK Servidor',
-        0x8004 => 'Sync Hora',
-        0x8100 => 'Registro OK',
-    ];
-
     public function handle()
     {
         set_time_limit(0);
@@ -44,11 +30,9 @@ class StartMdvrServer extends Command
         }
 
         socket_listen($socket);
-        $this->newLine();
-        $this->info('╔═══════════════════════════════════════════════════╗');
-        $this->info('║     SERVIDOR MDVR JTT808 - Puerto '.str_pad($port, 5).'          ║');
-        $this->info('╚═══════════════════════════════════════════════════╝');
-        $this->newLine();
+        $this->info('=====================================================');
+        $this->info("[SERVIDOR ROBUSTO] ESCUCHANDO EN PUERTO $port");
+        $this->info('=====================================================');
 
         $clients = [$socket];
         while (true) {
@@ -60,7 +44,7 @@ class StartMdvrServer extends Command
                         $newSocket = socket_accept($socket);
                         $clients[] = $newSocket;
                         $this->clientBuffers[spl_object_id($newSocket)] = '';
-                        $this->info('🟢 <fg=green>CONECTADA</> Nueva cámara');
+                        $this->warn('[CONN] Cámara conectada.');
                     } else {
                         $input = @socket_read($s, 65535);
                         if ($input) {
@@ -69,18 +53,12 @@ class StartMdvrServer extends Command
                             socket_close($s);
                             unset($this->clientBuffers[spl_object_id($s)]);
                             unset($clients[array_search($s, $clients)]);
-                            $this->error('🔴 DESCONECTADA');
-                            $this->newLine();
+                            $this->error('[DESC] Cámara desconectada.');
                         }
                     }
                 }
             }
         }
-    }
-
-    private function getMsgName($msgId)
-    {
-        return $this->msgNames[$msgId] ?? sprintf('0x%04X', $msgId);
     }
 
     private function handleTcpStream($socket, $input)
@@ -140,21 +118,17 @@ class StartMdvrServer extends Command
         $body = array_slice($data, 17);
         $phoneRaw = array_slice($data, 5, 10);
 
-        // LOG: Mensaje recibido
-        $msgName = $this->getMsgName($msgId);
-        $this->line(sprintf(
-            '   📥 <fg=yellow>%-15s</> #%-3d │ Tel: %s',
-            $msgName, $devSerial, substr($phone, -8)
-        ));
+        $this->info(sprintf('[MSG] ID: 0x%04X | Serial: %d | Phone: %s | ProtoVer: %d', $msgId, $devSerial, $phone, $protoVer));
 
         // --- LÓGICA DE RESPUESTA ---
         if ($msgId === 0x0100) {
             // 1. REGISTRO
+            $this->comment('   -> Procesando Registro...');
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body, $protoVer);
 
         } elseif ($msgId === 0x0102) {
             // 2. AUTENTICACIÓN
-            // Primero confirmamos que la Auth es correcta
+            $this->comment('   -> Procesando Autenticación...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $protoVer);
 
             // CRÍTICO: Esperamos 100ms y enviamos la hora para estabilizar la conexión
@@ -163,6 +137,7 @@ class StartMdvrServer extends Command
 
         } else {
             // 3. CUALQUIER OTRO MENSAJE (Heartbeat, GPS, Alarmas)
+            $this->comment('   -> Enviando Respuesta General (0x8001)...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $protoVer);
         }
     }
@@ -185,24 +160,17 @@ class StartMdvrServer extends Command
 
     /**
      * Envía la hora del servidor al dispositivo (0x8004)
-     * Esto es CRÍTICO para que la cámara no se reinicie
      */
     private function sendServerTime($socket, $phoneRaw, $protoVer)
     {
-        // 0x8004: Mensaje de Sincronización de Tiempo
-        // La fecha debe ser enviada como BCD: AA-MM-DD-HH-mm-ss (6 bytes)
-        $dateStr = date('ymdHis'); // Ejemplo: 260122124706 (22 Ene 2026 12:47:06)
+        $dateStr = date('ymdHis');
 
         $body = [];
-        // Convertimos cada par de números del string en un byte hexadecimal
-        // Ej: "26" se convierte en el byte 0x26
         foreach (str_split($dateStr, 2) as $part) {
             $body[] = hexdec($part);
         }
 
-        $this->line('   ⏰ <fg=cyan>Sincronizando hora:</> '.date('Y-m-d H:i:s'));
-
-        // Enviamos el paquete 0x8004
+        $this->info('   -> Enviando Hora al dispositivo: '.date('Y-m-d H:i:s'));
         $this->sendPacket($socket, 0x8004, $phoneRaw, $body, $protoVer);
     }
 
@@ -241,13 +209,11 @@ class StartMdvrServer extends Command
         }
         $final[] = 0x7E;
 
-        // LOG: Respuesta enviada
-        $replyName = $this->getMsgName($msgId);
-        $this->line(sprintf('   📤 <fg=green>%-15s</> ✓', $replyName));
+        $this->comment(sprintf('   <- REPLY 0x%04X to Serial %d', $msgId, ($body[0] << 8) | $body[1]));
 
         $result = @socket_write($socket, pack('C*', ...$final));
         if ($result === false) {
-            $this->error('   ❌ Error enviando: '.socket_strerror(socket_last_error($socket)));
+            $this->error('   [ERROR] socket_write falló: '.socket_strerror(socket_last_error($socket)));
         }
     }
 }
