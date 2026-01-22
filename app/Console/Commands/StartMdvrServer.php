@@ -131,8 +131,7 @@ class StartMdvrServer extends Command
             $this->comment('   -> Procesando Autenticación...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $protoVer);
 
-            // CRÍTICO: Esperamos 100ms y enviamos la hora para estabilizar la conexión
-            usleep(100000);
+            // Enviar hora inmediatamente después de auth
             $this->sendServerTime($socket, $phoneRaw, $protoVer);
 
         } else {
@@ -170,7 +169,8 @@ class StartMdvrServer extends Command
             $body[] = hexdec($part);
         }
 
-        $this->info('   -> Enviando Hora al dispositivo: '.date('Y-m-d H:i:s'));
+        // Log para verificar que enviamos lo correcto (formato BCD sin guiones)
+        $this->info('   -> [SYNC] Enviando Hora BCD (0x8004): '.$dateStr);
         $this->sendPacket($socket, 0x8004, $phoneRaw, $body, $protoVer);
     }
 
