@@ -7,10 +7,7 @@ use Illuminate\Console\Command;
 class StartMdvrServer extends Command
 {
     protected $signature = 'mdvr:start {--port=8808}';
-    protected $description = 'Servidor JT/T 808 Estable - Manejo de Ráfagas';
-
-    // Mantener el serial del servidor persistente
-    private static $srvSerial = 1;
+    protected $description = 'Servidor JT/T 808 para Ultravision N6 - Versión 2019 Estable';
 
     public function handle()
     {
@@ -18,8 +15,6 @@ class StartMdvrServer extends Command
         $address = '0.0.0.0';
         $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
-        // Aumentar buffer de lectura para no perder datos de ráfagas 0x0704
-        socket_set_option($socket, SOL_SOCKET, SO_RCVBUF, 65536);
 
         if (!@socket_bind($socket, $address, $port)) {
             $this->error("Error: Puerto $port ocupado.");
@@ -27,9 +22,9 @@ class StartMdvrServer extends Command
         }
 
         socket_listen($socket);
-        $this->info("=====================================================");
-        $this->info("[MDVR SERVER] ESCUCHANDO EN PUERTO $port");
-        $this->info("=====================================================");
+        $this->info('=====================================================');
+        $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port (JTT808-2019)");
+        $this->info('=====================================================');
 
         $clients = [$socket];
         while (true) {
@@ -38,18 +33,15 @@ class StartMdvrServer extends Command
             if (socket_select($read, $write, $except, 0, 100000) > 0) {
                 foreach ($read as $s) {
                     if ($s === $socket) {
-                        $newSocket = socket_accept($socket);
-                        $clients[] = $newSocket;
+                        $clients[] = socket_accept($socket);
                         $this->warn('[CONN] Cámara conectada.');
                     } else {
-                        // Leer hasta 16KB para capturar múltiples paquetes 0x0704
-                        $input = @socket_read($s, 16384);
+                        $input = @socket_read($s, 8192);
                         if ($input) {
                             $this->splitAndProcess($s, $input);
                         } else {
                             @socket_close($s);
-                            $index = array_search($s, $clients);
-                            if ($index !== false) unset($clients[$index]);
+                            unset($clients[array_search($s, $clients)]);
                             $this->error('[DESC] Cámara desconectada.');
                         }
                     }
@@ -61,9 +53,8 @@ class StartMdvrServer extends Command
     private function splitAndProcess($socket, $input)
     {
         $hex = bin2hex($input);
-        // Expresión regular que busca CUALQUIER COSA entre dos 7E
-        // La 'i' es para case-insensitive y 'U' para que sea "greedy" correctamente
-        if (preg_match_all('/7e(..*?)7e/i', $hex, $matches)) {
+        // Expresión regular para capturar paquetes completos 7E...7E
+        if (preg_match_all('/7e(..*?)7e/', $hex, $matches)) {
             foreach ($matches[0] as $packetHex) {
                 $this->processBuffer($socket, hex2bin($packetHex));
             }
@@ -73,9 +64,11 @@ class StartMdvrServer extends Command
     private function processBuffer($socket, $input)
     {
         $rawHex = strtoupper(bin2hex($input));
+        $this->line("\n<fg=yellow>[RAW RECV]</>: " . implode(' ', str_split($rawHex, 2)));
+
         $bytes = array_values(unpack('C*', $input));
 
-        // 1. UNESCAPE
+        // 1. UNESCAPE (Manual Cap 2.2.1)
         $data = [];
         for ($i = 0; $i < count($bytes); $i++) {
             if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
@@ -92,22 +85,30 @@ class StartMdvrServer extends Command
         }
 
         if (count($data) < 15) return;
+
+        // Payload sin delimitadores ni checksum
         $payload = array_slice($data, 1, -2);
 
-        // 2. PARSE HEADER
+        // 2. PARSE HEADER 2019
         $msgId = ($payload[0] << 8) | $payload[1];
+        $attr = ($payload[2] << 8) | $payload[3];
         $phoneRaw = array_slice($payload, 5, 10);
         $devSerial = ($payload[15] << 8) | $payload[16];
+        $body = array_slice($payload, 17);
 
-        $this->info(sprintf('[RECV] 0x%04X | Serial: %d', $msgId, $devSerial));
+        $this->info(sprintf('[MSG] 0x%04X | Serial: %d | Phone: %s', $msgId, $devSerial, bin2hex(pack('C*', ...$phoneRaw))));
 
         // 3. RESPUESTAS
         switch ($msgId) {
             case 0x0100: // Registro
+                $this->comment('   -> Procesando Registro (0x0100)...');
                 $this->respondRegistration($socket, $phoneRaw, $devSerial);
                 break;
+            case 0x0102: // Autenticación (Siguiente paso después del registro)
+                $this->info('   -> [AUTH] Terminal autenticándose...');
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                break;
             default:
-                // Responder a 0x0102, 0x0002, 0x0704, 0x0900 de forma genérica
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 break;
         }
@@ -116,11 +117,15 @@ class StartMdvrServer extends Command
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
         $authCode = '123456';
-        $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x00];
+        $responseBody = [
+            ($devSerial >> 8) & 0xFF,
+            $devSerial & 0xFF,
+            0x00, // Resultado: Éxito
+        ];
         foreach (str_split($authCode) as $char) {
-            $body[] = ord($char);
+            $responseBody[] = ord($char);
         }
-        $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
+        $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
     }
 
     private function respondGeneral($socket, $phoneRaw, $devSerial, $replyMsgId)
@@ -130,7 +135,7 @@ class StartMdvrServer extends Command
             $devSerial & 0xFF,
             ($replyMsgId >> 8) & 0xFF,
             $replyMsgId & 0xFF,
-            0x00,
+            0x00, // OK
         ];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
@@ -138,32 +143,38 @@ class StartMdvrServer extends Command
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
         $bodyLen = count($body);
-        $attr = 0x4000 | ($bodyLen & 0x03FF);
+        $attr = 0x4000 | ($bodyLen & 0x03FF); // Bit 14 = Protocolo 2019
 
         $header = [
             ($msgId >> 8) & 0xFF,
             ($msgId & 0xFF),
             ($attr >> 8) & 0xFF,
             ($attr & 0xFF),
-            0x01, // 2019
+            0x01, // Versión 2019
         ];
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
 
-        $header[] = (self::$srvSerial >> 8) & 0xFF;
-        $header[] = (self::$srvSerial & 0xFF);
-        self::$srvSerial = (self::$srvSerial + 1) % 65535;
+        static $srvSerial = 1;
+        $header[] = ($srvSerial >> 8) & 0xFF;
+        $header[] = $srvSerial & 0xFF;
+        $srvSerial = ($srvSerial + 1) % 65535;
 
-        $full = array_merge($header, $body);
+        // 1. Unir Header + Body
+        $fullContent = array_merge($header, $body);
+
+        // 2. Calcular Checksum SOBRE EL CONTENIDO COMPLETO
         $cs = 0;
-        foreach ($full as $byte) {
+        foreach ($fullContent as $byte) {
             $cs ^= $byte;
         }
-        $full[] = $cs;
+        $fullContent[] = $cs; // Añadimos el checksum al final del contenido
 
+        // 3. ESCAPADO FINAL (Crucial para estabilidad)
+        // Se escapan todos los bytes del contenido + el checksum
         $escaped = [];
-        foreach ($full as $b) {
+        foreach ($fullContent as $b) {
             if ($b === 0x7E) {
                 $escaped[] = 0x7D;
                 $escaped[] = 0x02;
@@ -175,10 +186,11 @@ class StartMdvrServer extends Command
             }
         }
 
+        // 4. Empaquetar con delimitadores
         $final = array_merge([0x7E], $escaped, [0x7E]);
         $binary = pack('C*', ...$final);
 
-        $this->line('<fg=green>[SEND]</> ' . strtoupper(bin2hex($binary)));
+        $this->line('<fg=green>[SEND HEX]</>: ' . strtoupper(bin2hex($binary)));
         @socket_write($socket, $binary);
     }
 }
