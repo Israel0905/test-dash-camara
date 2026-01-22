@@ -42,6 +42,11 @@ class StartMdvrServer extends Command
                 foreach ($read as $s) {
                     if ($s === $socket) {
                         $newSocket = socket_accept($socket);
+
+                        // Configurar Keep-Alive en el socket del cliente
+                        socket_set_option($newSocket, SOL_SOCKET, SO_KEEPALIVE, 1);
+                        socket_set_option($newSocket, SOL_TCP, $tcpNoDelay, 1);
+
                         $clients[] = $newSocket;
                         $this->clientBuffers[spl_object_id($newSocket)] = '';
                         $this->warn('[CONN] Cámara conectada.');
