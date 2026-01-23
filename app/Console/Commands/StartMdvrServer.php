@@ -152,34 +152,36 @@ class StartMdvrServer extends Command
     /* ===================== HANDLERS ===================== */
 
     private function handleRegister($sock, array $phoneBcd, int $serial, string $termId, int $ver, bool $is2019): void
-    {
-        $sid = spl_object_id($sock);
-        $this->sessions[$sid] = 'REGISTERED';
+{
+    $sid = spl_object_id($sock);
+    $this->sessions[$sid] = 'REGISTERED';
 
-        // 1. Usar el código del ejemplo del cliente que pasaste al principio
-        // Si este falla, probaremos con $authStr = $termId;
-        $authStr = "8390123456789"; 
-        
-        $body = [
-            ($serial >> 8) & 0xFF, // Serial recibido High
-            $serial & 0xFF,        // Serial recibido Low
-            0x00                   // Resultado 00 (Éxito)
-        ];
+    /**
+     * CAMBIO CRÍTICO:
+     * La cámara envía 992001. Vamos a usar exactamente ese ID como Auth Code.
+     * El estándar dice que el Auth Code debe ser lo que el servidor decida,
+     * pero muchos MDVRs chinos solo aceptan su propio ID o "000000".
+     */
+    $authStr = $termId; 
+    
+    $body = [
+        ($serial >> 8) & 0xFF, 
+        $serial & 0xFF,        
+        0x00                   // 00 = Éxito
+    ];
 
-        // Convertir AuthCode a ASCII
-        foreach (str_split($authStr) as $c) {
-            $body[] = ord($c);
-        }
-        
-        // IMPORTANTE: En el estándar 2019, el 0x8100 NO suele llevar terminador nulo 
-        // a menos que el manual lo especifique. El ejemplo que diste tenía un 00 al final.
-        $body[] = 0x00; 
-
-        $this->info("[SEND] 0x8100 -> Respondiendo a Serial: $serial con Auth: $authStr");
-        $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
+    // Añadir el ID como Auth Code
+    foreach (str_split($authStr) as $c) {
+        $body[] = ord($c);
     }
+    
+    // Probaremos SIN el terminador nulo 0x00 primero, 
+    // ya que el largo 4009 (9 bytes) suele ser más aceptado.
+    // $body[] = 0x00; 
 
-
+    $this->info("[SEND] 0x8100 -> Respondiendo con ID como Auth: $authStr");
+    $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
+}
 
     private function handleAuth($sock, array $phoneBcd, int $serial, int $ver, bool $is2019): void
     {
@@ -279,8 +281,10 @@ class StartMdvrServer extends Command
     {
         $s = '';
         foreach ($bcd as $b) {
-            $s .= sprintf('%02x', $b);
+            $s .= sprintf('%02X', $b);
         }
-        return ltrim($s, '0');
+        // No quites los ceros a la izquierda todavía, 
+        // deja que el ID sea el número completo de 20 dígitos si es necesario.
+        return ltrim($s, '0'); 
     }
 }
