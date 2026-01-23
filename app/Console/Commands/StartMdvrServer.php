@@ -147,9 +147,12 @@ class StartMdvrServer extends Command
 
             // --- RESPUESTAS ---
             if ($msgId === 0x0100) {
-                // RESET OBLIGATORIO: Forzamos serial 0 para sincronizar con la nueva sesión.
-                $this->terminalSerials[$phoneKey] = 0;
-                $this->info("   -> [RESET] Secuencia reiniciada para Terminal: $phoneKey");
+                // RESET CONDICIONAL: Solo si la cámara empieza de 0 (nueva sesión real).
+                // Si es un reintento (serial 1, 2...), NO reseteamos para mantener la secuencia.
+                if ($devSerial === 0) {
+                    $this->terminalSerials[$phoneKey] = 0;
+                    $this->info('   -> [RESET] Nueva sesión detectada (Serial 0). Secuencia reiniciada.');
+                }
 
                 $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
             } elseif ($msgId === 0x0001) {
@@ -158,6 +161,18 @@ class StartMdvrServer extends Command
                 continue;
             } elseif ($msgId === 0x0102) {
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+
+                // Enviamos una configuración de intervalo de latido (Heartbeat) a 30s para estabilizar sesión.
+                // Mensaje 0x8103: Set Terminal Parameters
+                // Body: [Count=1] [ID=0x00000001] [Len=4] [Value=30]
+                $paramBody = [
+                    0x01,                   // Cantidad de parámetros: 1
+                    0x00, 0x00, 0x00, 0x01, // ID Parámetro: Heartbeat Interval
+                    0x04,                   // Longitud: 4 bytes
+                    0x00, 0x00, 0x00, 0x1E,  // Valor: 30 segundos
+                ];
+                $this->info('   -> Configurando Parámetros (0x8103) para evitar desconexión...');
+                $this->sendPacket($socket, 0x8103, $phoneRaw, $paramBody);
 
                 // IMPORTANTE: Handshake para mantener viva la sesión
                 $this->info('   -> Enviando Consulta de Parámetros (0x8104) para evitar Timeout...');
