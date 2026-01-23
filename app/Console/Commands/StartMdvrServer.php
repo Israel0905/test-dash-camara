@@ -62,79 +62,88 @@ class StartMdvrServer extends Command
 
     private function processBuffer($socket, $input)
     {
-        $rawHex = strtoupper(bin2hex($input));
-        $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
+        // 1. DIVIDIR EL BUFFER: Cortamos la cadena cada vez que aparece el byte 0x7E
+        $rawPackets = explode(chr(0x7E), $input);
 
-        $bytes = array_values(unpack('C*', $input));
+        // Filtramos los fragmentos vacíos (que quedan entre dos 7E juntos: 7E7E)
+        $validPackets = array_filter($rawPackets, function ($p) {
+            return strlen($p) > 10; // Un paquete JTT808 válido sin 7Es tiene más de 10 bytes
+        });
 
-        // 1. UNESCAPE (Manual Cap 2.2.1)
-        $data = [];
-        for ($i = 0; $i < count($bytes); $i++) {
-            if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
-                if ($bytes[$i + 1] === 0x01) {
-                    $data[] = 0x7D;
-                    $i++;
-                } elseif ($bytes[$i + 1] === 0x02) {
-                    $data[] = 0x7E;
-                    $i++;
+        // 2. PROCESAR CADA PAQUETE INDIVIDUALMENTE
+        foreach ($validPackets as $packetData) {
+            // Reconstruimos el paquete con sus 7E para que la lógica de Unescape funcione igual
+            $singlePacket = chr(0x7E).$packetData.chr(0x7E);
+
+            $rawHex = strtoupper(bin2hex($singlePacket));
+            $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
+
+            $bytes = array_values(unpack('C*', $singlePacket));
+
+            // --- UNESCAPE (Tu código original) ---
+            $data = [];
+            for ($i = 0; $i < count($bytes); $i++) {
+                if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
+                    if ($bytes[$i + 1] === 0x01) {
+                        $data[] = 0x7D;
+                        $i++;
+                    } elseif ($bytes[$i + 1] === 0x02) {
+                        $data[] = 0x7E;
+                        $i++;
+                    }
+                } else {
+                    $data[] = $bytes[$i];
                 }
-            } else {
-                $data[] = $bytes[$i];
             }
-        }
 
-        if (count($data) < 15) {
-            return;
-        }
+            if (count($data) < 15) {
+                continue;
+            }
 
-        // Payload sin delimitadores 7E ni checksum
-        $payload = array_slice($data, 1, -2);
+            // Payload sin delimitadores 7E ni checksum
+            $payload = array_slice($data, 1, -2);
 
-        // 2. PARSE HEADER 2019 (Tabla 2.2.2)
-        $msgId = ($payload[0] << 8) | $payload[1];
-        $attr = ($payload[2] << 8) | $payload[3];
-        $is2019 = ($attr >> 14) & 0x01;
+            // --- PARSE HEADER ---
+            $msgId = ($payload[0] << 8) | $payload[1];
+            $attr = ($payload[2] << 8) | $payload[3];
+            $is2019 = ($attr >> 14) & 0x01;
 
-        // En 2019 el Protocol Version es el byte 4
-        $protocolVer = $payload[4];
-        $phone = bin2hex(pack('C*', ...array_slice($payload, 5, 10)));
-        // El Serial de la cámara está en bytes 15-16
-        $devSerial = ($payload[15] << 8) | $payload[16];
-        $body = array_slice($payload, 17);
+            $protocolVer = $payload[4];
+            $phone = bin2hex(pack('C*', ...array_slice($payload, 5, 10)));
+            $devSerial = ($payload[15] << 8) | $payload[16];
+            $body = array_slice($payload, 17);
 
-        $this->info(sprintf(
-            '[INFO] ID: 0x%04X | Serial: %d | Phone: %s | Ver2019: %s',
-            $msgId,
-            $devSerial,
-            $phone,
-            ($is2019 ? 'SI' : 'NO')
-        ));
+            $this->info(sprintf(
+                '[INFO] ID: 0x%04X | Serial: %d | Phone: %s',
+                $msgId, $devSerial, $phone
+            ));
 
-        // 3. RESPUESTAS
-        $phoneRaw = array_slice($payload, 5, 10);
-        $phoneHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
-        $this->line("   Phone RAW (para respuesta): <fg=cyan>$phoneHex</>");
+            // --- RESPUESTAS ---
+            $phoneRaw = array_slice($payload, 5, 10);
 
-        if ($msgId === 0x0100) {
-            $this->comment('   -> Procesando Registro...');
-            $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
-        } elseif ($msgId === 0x0001) {
-            // NUEVO: Si la cámara solo está confirmando algo, no le respondemos.
-            $this->info('   -> [OK] La cámara confirmó nuestro mensaje. No responder.');
+            if ($msgId === 0x0100) {
+                $this->comment('   -> Procesando Registro...');
+                $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
 
-            return; // Salimos sin enviar nada
-        } elseif ($msgId === 0x0900) {
-            // NUEVO: Respuesta específica para 0x0900
-            $this->comment('   -> Respondiendo Datos Transparentes (0x8900)...');
-            // La respuesta 0x8900 usa el mismo tipo de mensaje (byte 0) que envió la cámara
-            $transparentType = $body[0] ?? 0xF3;
-            $this->sendPacket($socket, 0x8900, $phoneRaw, [$transparentType]);
-        } else {
-            $this->comment('   -> Enviando Respuesta General (0x8001)...');
-            $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+            } elseif ($msgId === 0x0001) {
+                $this->info('   -> [OK] La cámara confirmó nuestro mensaje. No responder.');
 
-            if ($msgId === 0x0200) {
-                $this->parseLocation($body);
+                // En un bucle foreach no usamos return, usamos continue para pasar al siguiente paquete
+                continue;
+
+            } elseif ($msgId === 0x0900) {
+                $this->comment('   -> Respondiendo Datos Transparentes (0x8900)...');
+                $transparentType = $body[0] ?? 0xF3;
+                $this->sendPacket($socket, 0x8900, $phoneRaw, [$transparentType]);
+
+            } else {
+                $this->comment('   -> Enviando Respuesta General (0x8001)...');
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+
+                // Parsear ubicación si existe la función
+                if ($msgId === 0x0200 && method_exists($this, 'parseLocation')) {
+                    $this->parseLocation($body);
+                }
             }
         }
     }
