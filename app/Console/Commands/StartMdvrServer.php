@@ -89,8 +89,8 @@ class StartMdvrServer extends Command
             $packetLength = $end - $start + 1;
             $singlePacket = substr($buffer, $start, $packetLength);
 
-            // Cortamos el búfer para quitar el paquete que ya procesamos
-            $buffer = substr($buffer, $end + 1);
+            // Cortamos el búfer para quitar el paquete que ya procesamos (-1 al offset para dejar el 7E final)
+            $buffer = substr($buffer, $end);
 
             // Si el paquete es muy corto (ej: "7E 7E"), lo ignoramos
             if (strlen($singlePacket) < 15) {
