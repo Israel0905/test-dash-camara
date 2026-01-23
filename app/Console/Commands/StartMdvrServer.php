@@ -142,10 +142,15 @@ class StartMdvrServer extends Command
             $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
 
             // --- EVITAR SESIONES DUPLICADAS (Fix Flapping) ---
+            // --- CLEANUP DUPLICATE SESSIONS (FIX SOCKET FLAPPING) ---
             if (isset($this->terminalSockets[$phoneKey]) && $this->terminalSockets[$phoneKey] !== $socket) {
                 $oldSocket = $this->terminalSockets[$phoneKey];
-                $this->warn("   -> [CLEANUP] Cerrando socket fantasma para terminal $phoneKey");
-                $this->closeConnection($oldSocket);
+
+                // Solo intentamos cerrar si el socket sigue siendo una referencia válida
+                if ($oldSocket && (is_resource($oldSocket) || $oldSocket instanceof \Socket)) {
+                    $this->warn("   -> [CLEANUP] Cerrando sesión previa para Terminal: $phoneKey");
+                    $this->closeConnection($oldSocket);
+                }
             }
             $this->terminalSockets[$phoneKey] = $socket;
 
@@ -242,13 +247,24 @@ class StartMdvrServer extends Command
 
     private function closeConnection($s)
     {
+        if (! $s || (! is_resource($s) && ! ($s instanceof \Socket))) {
+            return; // Ya está cerrado o no es válido, ignoramos.
+        }
+
         $id = spl_object_id($s);
+
+        // Intentamos cerrar con supresión de errores por si el OS ya lo cerró
         @socket_close($s);
+
+        // Limpiamos de la lista de clientes activos
         $key = array_search($s, $this->clients);
         if ($key !== false) {
             unset($this->clients[$key]);
         }
-        unset($this->clientBuffers[$id], $this->clientProtocols[$id]);
-        $this->error("[DESC] Cámara desconectada (ID $id).");
+
+        // Limpiamos buffers y protocolos
+        unset($this->clientBuffers[$id], $this->clientProtocols[$id], $this->clientVersions[$id]);
+
+        $this->error("[DESC] Socket liberado (ID $id).");
     }
 }
