@@ -146,6 +146,9 @@ class StartMdvrServer extends Command
 
             // --- RESPUESTAS ---
             if ($msgId === 0x0100) {
+                // RESETEAR SERIAL: Si es un registro, la secuencia del servidor DEBE empezar en 0
+                $this->terminalSerials[$phoneHex] = 0;
+
                 $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
             } elseif ($msgId === 0x0001) {
                 $this->info('   -> [OK] La cámara confirmó nuestro mensaje.');
