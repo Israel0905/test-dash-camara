@@ -187,7 +187,6 @@ class StartMdvrServer extends Command
             ($devSerial >> 8) & 0xFF,
             $devSerial & 0xFF,
             0x00,
-            strlen($authCode), // Byte de longitud para Auth Code
         ];
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
