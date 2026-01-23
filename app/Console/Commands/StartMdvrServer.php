@@ -180,12 +180,12 @@ class StartMdvrServer extends Command
         $this->sessions[spl_object_id($sock)] = 'REGISTERED';
 
         if (!isset($this->authCodes[$termId])) {
-            $this->authCodes[$termId] = '992001000000000';
+            // Usa el IMEI/TerminalID ASCII como AuthCode (ULV real)
+            $this->authCodes[$termId] = $termId;
         }
 
+        // JT/T808-2019: body = Result(1) + AuthCode(N)
         $body = [
-            ($serial >> 8) & 0xFF,
-            $serial & 0xFF,
             0x00,
             ...array_map('ord', str_split($this->authCodes[$termId]))
         ];
