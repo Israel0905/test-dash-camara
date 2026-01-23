@@ -118,6 +118,11 @@ class StartMdvrServer extends Command
         if ($msgId === 0x0100) {
             $this->comment('   -> Procesando Registro...');
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
+        } elseif ($msgId === 0x0001) {
+            // NUEVO: Si la cámara solo está confirmando algo, no le respondemos.
+            $this->info('   -> [OK] La cámara confirmó nuestro mensaje. No responder.');
+
+            return; // Salimos sin enviar nada
         } elseif ($msgId === 0x0900) {
             // NUEVO: Respuesta específica para 0x0900
             $this->comment('   -> Respondiendo Datos Transparentes (0x8900)...');
