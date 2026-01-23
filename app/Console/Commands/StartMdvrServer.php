@@ -287,6 +287,6 @@ class StartMdvrServer extends Command
             $s .= ($b >> 4) & 0x0F;
             $s .= $b & 0x0F;
         }
-        return $s; // Removed ltrim for debugging
+        return ltrim($s, '0');
     }
 }
