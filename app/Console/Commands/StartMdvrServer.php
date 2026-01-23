@@ -146,6 +146,12 @@ class StartMdvrServer extends Command
 
             // --- RESPUESTAS ---
             if ($msgId === 0x0100) {
+                // RESET CONDICIONAL: Si la cámara empieza de 0, nosotros también.
+                // Si la cámara reintenta (Serial 1, 2...), seguimos contando.
+                if ($devSerial === 0) {
+                    $this->terminalSerials[$phoneHex] = 0;
+                }
+                
                 $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
             } elseif ($msgId === 0x0001) {
                 $this->info('   -> [OK] La cámara confirmó nuestro mensaje.');
