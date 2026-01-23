@@ -230,6 +230,23 @@ class StartMdvrServer extends Command
     {
         static $srvSerial = 1;
 
+        // SANITIZE: Ensure PhoneBCD is strict length
+        if ($is2019) {
+            // 2019: 10 bytes
+            if (count($phoneBcd) < 10) {
+                $phoneBcd = array_pad($phoneBcd, -10, 0); // Left pad
+            } elseif (count($phoneBcd) > 10) {
+                $phoneBcd = array_slice($phoneBcd, -10); // Take last 10
+            }
+        } else {
+            // 2013: 6 bytes
+            if (count($phoneBcd) < 6) {
+                $phoneBcd = array_pad($phoneBcd, -6, 0);
+            } elseif (count($phoneBcd) > 6) {
+                $phoneBcd = array_slice($phoneBcd, -6);
+            }
+        }
+
         $attr = count($body);
         if ($is2019) {
             $attr |= 0x4000;
