@@ -160,7 +160,13 @@ class StartMdvrServer extends Command
 
             // --- RESPUESTAS (Handshake Lógico del Manual) ---
             if ($msgId === 0x0100) {
-                // FIX: Eliminamos reset forzado. Permitimos que el serial incremente (0, 1, 2...)
+                // FIX: Si la cámara físicamente manda Serial 0, nosotros también debemos resetear nuestro contador.
+                // Esto asegura que respondamos con Serial de Servidor 0 y la cámara acepte el paquete.
+                if ($devSerial === 0) {
+                    $this->terminalSerials[$phoneKey] = 0;
+                    $this->info('   -> [RESET] Nueva sesión física. Secuencia del servidor reiniciada a 0.');
+                }
+
                 $this->respondRegistration($socket, $phoneRaw, $devSerial);
             } elseif ($msgId === 0x0102) {
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
