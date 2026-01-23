@@ -90,22 +90,33 @@ class StartMdvrServer extends Command
     private function consumeFrames($sock): void
     {
         $id = spl_object_id($sock);
+        $buffer = $this->buffers[$id];
 
-        while (true) {
-            $buffer = $this->buffers[$id];
+        // MODO 1: JT/T clásico con delimitador 0x7E
+        if (strpos($buffer, "\x7E") !== false) {
+            while (true) {
+                $start = strpos($buffer, "\x7E");
+                if ($start === false) {
+                    $this->buffers[$id] = $buffer;
+                    return;
+                }
 
-            $start = strpos($buffer, "\x7E");
-            $end   = strpos($buffer, "\x7E", $start + 1);
+                $end = strpos($buffer, "\x7E", $start + 1);
+                if ($end === false) {
+                    $this->buffers[$id] = $buffer;
+                    return;
+                }
 
-            if ($start === false || $end === false) {
-                return;
+                $rawFrame = substr($buffer, $start + 1, $end - $start - 1);
+                $buffer = substr($buffer, $end + 1);
+
+                $this->processFrame($sock, $rawFrame);
             }
-
-            $rawFrame = substr($buffer, $start + 1, $end - $start - 1);
-            $this->buffers[$id] = substr($buffer, $end + 1);
-
-            $this->processFrame($sock, $rawFrame);
         }
+
+        // MODO 2: ULV TCP sin 0x7E (frame completo)
+        $this->buffers[$id] = '';
+        $this->processFrame($sock, $buffer);
     }
 
     private function processFrame($sock, string $rawFrame): void
@@ -190,8 +201,6 @@ class StartMdvrServer extends Command
         $body = [
             ($serial >> 8) & 0xFF,
             $serial & 0xFF,
-            0x01,
-            0x02,
             0x00
         ];
 
