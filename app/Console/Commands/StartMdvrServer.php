@@ -178,6 +178,7 @@ class StartMdvrServer extends Command
         foreach (str_split($authStr) as $c) {
             $body[] = ord($c);
         }
+        $body[] = 0x00; // Null Terminator (Required based on manufacturer example)
 
         /*
         // Binary Zero Auth Code (6 bytes)
