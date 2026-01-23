@@ -163,7 +163,7 @@ class StartMdvrServer extends Command
         $this->sessions[$sid] = 'REGISTERED';
 
         if (!isset($this->authCodes[$termId])) {
-            $this->authCodes[$termId] = $termId; // Use full Terminal ID as Auth Code
+            $this->authCodes[$termId] = '000000'; // Default Auth Code
         }
 
         $body = [
@@ -215,9 +215,6 @@ class StartMdvrServer extends Command
 
     private function sendPacket($sock, int $msgId, array $phoneBcd, array $body, int $ver = 1, bool $is2019 = false): void
     {
-        // FORCE 2013 FORMAT for response
-        $is2019 = false;
-
         static $srvSerial = 1;
 
         $attr = count($body);
