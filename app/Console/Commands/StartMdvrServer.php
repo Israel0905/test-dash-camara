@@ -192,9 +192,8 @@ class StartMdvrServer extends Command
                 $this->info('   -> Configurando Parámetros (0x8103) para evitar desconexión...');
                 $this->sendPacket($socket, 0x8103, $phoneRaw, $paramBody);
 
-                // IMPORTANTE: Handshake para mantener viva la sesión
-                $this->info('   -> Enviando Consulta de Parámetros (0x8104) para evitar Timeout...');
-                $this->sendPacket($socket, 0x8104, $phoneRaw, []);
+                // FIX: Eliminamos 0x8104 para evitar sobrecargar la negociación inicial o causar loops en puerto 8810
+                // Nos basamos solo en 0x8103 (Heartbeat) para estabilizar.
             } else {
                 // Confirmación General para TODOS (evita timeouts)
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
