@@ -147,23 +147,23 @@ class StartMdvrServer extends Command
         ));
 
         if ($msgId === 0x0100) {
-            $this->handleRegister($sock, $phoneBcd, $serial, $termId);
+            $this->handleRegister($sock, $phoneBcd, $serial, $termId, $data[4] ?? 1, $is2019);
         } elseif ($msgId === 0x0102) {
-            $this->handleAuth($sock, $phoneBcd, $serial);
+            $this->handleAuth($sock, $phoneBcd, $serial, $data[4] ?? 1, $is2019);
         } else {
-            $this->handleGeneral($sock, $phoneBcd, $serial, $msgId);
+            $this->handleGeneral($sock, $phoneBcd, $serial, $msgId, $data[4] ?? 1, $is2019);
         }
     }
 
     /* ===================== HANDLERS ===================== */
 
-    private function handleRegister($sock, array $phoneBcd, int $serial, string $termId): void
+    private function handleRegister($sock, array $phoneBcd, int $serial, string $termId, int $ver, bool $is2019): void
     {
         $sid = spl_object_id($sock);
         $this->sessions[$sid] = 'REGISTERED';
 
         if (!isset($this->authCodes[$termId])) {
-            $this->authCodes[$termId] = '123456'; // FIXED AUTH CODE FOR DEBUGGING
+            $this->authCodes[$termId] = $termId; // Use full Terminal ID as Auth Code
         }
 
         $body = [
@@ -177,10 +177,10 @@ class StartMdvrServer extends Command
         }
 
         $this->info('[SEND] 0x8100 Registro OK');
-        $this->sendPacket($sock, 0x8100, $phoneBcd, $body);
+        $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
     }
 
-    private function handleAuth($sock, array $phoneBcd, int $serial): void
+    private function handleAuth($sock, array $phoneBcd, int $serial, int $ver, bool $is2019): void
     {
         $this->sessions[spl_object_id($sock)] = 'ONLINE';
 
@@ -193,10 +193,10 @@ class StartMdvrServer extends Command
         ];
 
         $this->info('[SEND] 0x8001 Auth OK');
-        $this->sendPacket($sock, 0x8001, $phoneBcd, $body);
+        $this->sendPacket($sock, 0x8001, $phoneBcd, $body, $ver, $is2019);
     }
 
-    private function handleGeneral($sock, array $phoneBcd, int $serial, int $msgId): void
+    private function handleGeneral($sock, array $phoneBcd, int $serial, int $msgId, int $ver, bool $is2019): void
     {
         if (($this->sessions[spl_object_id($sock)] ?? '') !== 'ONLINE') return;
 
@@ -208,28 +208,36 @@ class StartMdvrServer extends Command
             0x00
         ];
 
-        $this->sendPacket($sock, 0x8001, $phoneBcd, $body);
+        $this->sendPacket($sock, 0x8001, $phoneBcd, $body, $ver, $is2019);
     }
 
     /* ===================== SEND ===================== */
 
-    private function sendPacket($sock, int $msgId, array $phoneBcd, array $body): void
+    private function sendPacket($sock, int $msgId, array $phoneBcd, array $body, int $ver = 1, bool $is2019 = false): void
     {
         static $srvSerial = 1;
 
-        $attr = 0x4000 | count($body);
+        $attr = count($body);
+        if ($is2019) {
+            $attr |= 0x4000;
+        }
 
         $packet = [
             ($msgId >> 8) & 0xFF,
             $msgId & 0xFF,
             ($attr >> 8) & 0xFF,
             $attr & 0xFF,
-            0x01,
-            ...$phoneBcd,
+        ];
+
+        if ($is2019) {
+            $packet[] = $ver;
+        }
+
+        $packet = array_merge($packet, $phoneBcd, [
             ($srvSerial >> 8) & 0xFF,
             $srvSerial & 0xFF,
             ...$body
-        ];
+        ]);
 
         $srvSerial = ($srvSerial + 1) & 0xFFFF;
 
