@@ -21,6 +21,8 @@ class StartMdvrServer extends Command
 
     protected $clients = [];
 
+    protected $clientVersions = []; // Added: Track protocol version byte
+
     // Rastreo de sockets activos por Terminal para evitar duplicados (Socket Flapping)
     protected $terminalSockets = [];
 
@@ -124,6 +126,10 @@ class StartMdvrServer extends Command
 
             // --- PARSING DEL ENCABEZADO (Tabla 2.2.2-1) ---
             if ($is2019) {
+                // Capturamos el byte de versión (índice 4 del payload) para responder igual
+                // Si la cámara manda 0x00, respondemos con 0x00. Si manda 0x01, con 0x01.
+                $this->clientVersions[$clientId] = $payload[4] ?? 0x01;
+
                 $phoneRaw = array_slice($payload, 5, 10);
                 $devSerial = ($payload[15] << 8) | $payload[16];
                 $headerLen = 17;
@@ -200,7 +206,8 @@ class StartMdvrServer extends Command
 
         if ($protocol === '2019') {
             $attr |= 0x4000;
-            $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF, 0x01];
+            $ver = $this->clientVersions[spl_object_id($socket)] ?? 0x01; // Default 0x01 si no se detectó
+            $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF, $ver];
         } else {
             $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF];
         }
