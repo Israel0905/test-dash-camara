@@ -7,21 +7,23 @@ use Illuminate\Console\Command;
 class StartMdvrServer extends Command
 {
     protected $signature = 'mdvr:start {--port=8809}';
-    protected $description = 'Servidor JT/T 808-2019 ULV estable (PHP 8.x)';
+    protected $description = 'Servidor JT/T 808-2019 ULV / MDVR (PHP 8.x con debug real)';
 
     private array $buffers = [];
+
     private array $sessions = [];
+
     private array $authCodes = [];
 
     public function handle(): void
     {
-        $port = (int)$this->option('port');
+        $port = (int) $this->option('port');
 
         $server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         socket_set_option($server, SOL_SOCKET, SO_REUSEADDR, 1);
 
         if (!socket_bind($server, '0.0.0.0', $port)) {
-            $this->error('No se pudo bindear el puerto');
+            $this->error('[FATAL] No se pudo bindear el puerto');
             return;
         }
 
@@ -50,13 +52,14 @@ class StartMdvrServer extends Command
                     $this->buffers[$id] = '';
                     $this->sessions[$id] = 'NEW';
 
-                    $this->info("[CONN] Cámara conectada (ID {$id})");
+                    $this->warn("[CONN] Cámara conectada (ID {$id})");
                     continue;
                 }
 
                 $data = @socket_read($sock, 4096, PHP_BINARY_READ);
                 if ($data === '' || $data === false) {
                     $this->disconnect($sock, $clients);
+
                     continue;
                 }
 
@@ -72,8 +75,9 @@ class StartMdvrServer extends Command
         $id = spl_object_id($sock);
         unset($this->buffers[$id], $this->sessions[$id]);
         @socket_close($sock);
-        $clients = array_values(array_filter($clients, fn($s) => $s !== $sock));
-        $this->warn("[DESC] Cámara desconectada (ID {$id})");
+
+        $clients = array_values(array_filter($clients, fn($c) => $c !== $sock));
+        $this->error("[DESC] Cámara desconectada (ID {$id})");
     }
 
     /* ================= FRAME ================= */
@@ -88,7 +92,9 @@ class StartMdvrServer extends Command
             if ($start === false) break;
 
             $end = strpos($buffer, "\x7E", $start + 1);
-            if ($end === false) break;
+            if ($end === false) {
+                break;
+            }
 
             $raw = substr($buffer, $start + 1, $end - $start - 1);
             $buffer = substr($buffer, $end + 1);
@@ -104,12 +110,19 @@ class StartMdvrServer extends Command
         $this->line('[RAW IN ] ' . strtoupper(bin2hex($raw)));
 
         $data = $this->unescape($raw);
-        if (count($data) < 18) return;
+        if (count($data) < 20) {
+            $this->warn('[DROP] Frame incompleto');
+            return;
+        }
 
-        $checksum = array_pop($data);
-        $calc = 0;
-        foreach ($data as $b) $calc ^= $b;
-        if ($checksum !== $calc) return;
+        $recvCs = array_pop($data);
+        $calcCs = 0;
+        foreach ($data as $b) $calcCs ^= $b;
+
+        if ($recvCs !== $calcCs) {
+            $this->warn(sprintf('[DROP] Checksum inválido %02X != %02X', $recvCs, $calcCs));
+            return;
+        }
 
         $msgId = ($data[0] << 8) | $data[1];
         $phone = array_slice($data, 5, 10);
@@ -145,14 +158,11 @@ class StartMdvrServer extends Command
         }
 
         $body = [
-            ($recvSerial >> 8) & 0xFF,
-            $recvSerial & 0xFF,
-            0x00
+            ($serial >> 8) & 0xFF,
+            $serial & 0xFF,
+            0x00,
+            ...array_map('ord', str_split($auth))
         ];
-
-        foreach (str_split($this->authCodes[$termId]) as $c) {
-            $body[] = ord($c);
-        }
 
         $this->info('[SEND] 0x8100 Registro OK');
         $this->sendPacket($sock, 0x8100, $phone, $body);
@@ -163,16 +173,42 @@ class StartMdvrServer extends Command
         $this->sessions[spl_object_id($sock)] = 'ONLINE';
 
         $body = [
-            ($recvSerial >> 8) & 0xFF,
-            $recvSerial & 0xFF,
+            ($serial >> 8) & 0xFF,
+            $serial & 0xFF,
             0x00
         ];
 
         $this->info('[SEND] 0x8001 Auth OK');
         $this->sendPacket($sock, 0x8001, $phone, $body);
+
+        // Send Time Sync after authentication
+        usleep(50000);
+        $this->sendTimeSync($sock, $phone);
+
+        // Send Heartbeat Config after time sync
+        usleep(50000);
+        $this->sendHeartbeatConfig($sock, $phone);
     }
 
-    /* ================= SEND ================= */
+    private function handleGeneral($sock, array $phone, int $serial, int $msgId): void
+    {
+        if (($this->sessions[spl_object_id($sock)] ?? '') !== 'ONLINE') {
+            $this->warn('[DROP] Mensaje sin sesión ONLINE');
+            return;
+        }
+
+        $body = [
+            ($serial >> 8) & 0xFF,
+            $serial & 0xFF,
+            ($msgId >> 8) & 0xFF,
+            $msgId & 0xFF,
+            0x00
+        ];
+
+        $this->sendPacket($sock, 0x8001, $phone, $body);
+    }
+
+    /* ===================== SEND ===================== */
 
     private function sendPacket($sock, int $msgId, array $phone, array $body): void
     {
@@ -189,13 +225,15 @@ class StartMdvrServer extends Command
             ...$phone,
             ($srvSerial >> 8) & 0xFF,
             $srvSerial & 0xFF,
-            ...$body
+            ...$body,
         ];
 
         $srvSerial = ($srvSerial + 1) & 0xFFFF;
 
         $cs = 0;
-        foreach ($packet as $b) $cs ^= $b;
+        foreach ($packet as $b) {
+            $cs ^= $b;
+        }
         $packet[] = $cs;
 
         $escaped = [];
@@ -211,11 +249,10 @@ class StartMdvrServer extends Command
             }
         }
 
-        $frame = array_merge([0x7E], $escaped, [0x7E]);
-        $out = pack('C*', ...$frame);
-
-        $this->line('[RAW OUT] ' . strtoupper(bin2hex($out)));
-        @socket_write($sock, $out);
+        $frameBytes = array_merge([0x7E], $escaped, [0x7E]);
+        $frame = pack('C*', ...$frameBytes);
+        $this->line('[RAW OUT] ' . strtoupper(bin2hex($frame)));
+        @socket_write($sock, $frame);
     }
 
     private function unescape(string $raw): array
@@ -232,5 +269,14 @@ class StartMdvrServer extends Command
         }
 
         return $out;
+    }
+
+    private function bcdToString(array $bcd): string
+    {
+        $s = '';
+        foreach ($bcd as $b) {
+            $s .= sprintf('%X%X', ($b >> 4) & 0xF, $b & 0xF);
+        }
+        return ltrim($s, '0');
     }
 }
