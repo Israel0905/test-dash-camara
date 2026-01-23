@@ -139,14 +139,18 @@ class StartMdvrServer extends Command
             $body = array_slice($payload, $headerLen);
 
             // Convertir Phone a Hex para logs y serial persistence
-            $phoneHex = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+            $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+            $phoneHex = $phoneKey; // Mantener compatibilidad con variable usada en logs
 
             $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d | Terminal: %s',
                 $this->clientProtocols[$clientId], $msgId, $devSerial, $phoneHex));
 
             // --- RESPUESTAS ---
             if ($msgId === 0x0100) {
-                // FIX: Eliminamos reset manual para permitir que el serial incremente (0, 1, 2...)
+                // RESET OBLIGATORIO: Forzamos serial 0 para sincronizar con la nueva sesión.
+                $this->terminalSerials[$phoneKey] = 0;
+                $this->info("   -> [RESET] Secuencia reiniciada para Terminal: $phoneKey");
+
                 $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
             } elseif ($msgId === 0x0001) {
                 $this->info('   -> [OK] La cámara confirmó nuestro mensaje.');
