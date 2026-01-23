@@ -152,29 +152,31 @@ class StartMdvrServer extends Command
     /* ===================== HANDLERS ===================== */
 
     private function handleRegister($sock, array $phoneBcd, int $serial, string $termId, int $ver, bool $is2019): void
-    {
-        $sid = spl_object_id($sock);
-        $this->sessions[$sid] = 'REGISTERED';
+{
+    $sid = spl_object_id($sock);
+    $this->sessions[$sid] = 'REGISTERED';
 
-        // 1. Usar el código de autenticación EXACTO del ejemplo del cliente
-        $authStr = "8390123456789"; 
-        
-        // 2. CONSTRUCCIÓN DEL CUERPO (Message Body)
-        $body = [
-            ($serial >> 8) & 0xFF, // Debe ser el serial que RECIBISTE (0000 en tu primer log)
-            $serial & 0xFF,
-            0x00                   // Resultado: 0 = Éxito
-        ];
+    // PRUEBA A: Usa un código simple de 6 ceros (muy común en MDVR)
+    // PRUEBA B: Si falla, cambia "000000" por $termId
+    $authStr = "000000"; 
+    
+    $body = [
+        ($serial >> 8) & 0xFF,
+        $serial & 0xFF,
+        0x00 // 00 = Éxito
+    ];
 
-        // 3. Añadir Auth Code en ASCII
-        foreach (str_split($authStr) as $c) {
-            $body[] = ord($c);
-        }
-        $body[] = 0x00; // Terminador Nulo (El ejemplo del cliente lo tiene)
-
-        $this->info("[SEND] 0x8100 -> Respondiendo al Serial del cliente: $serial");
-        $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
+    foreach (str_split($authStr) as $c) {
+        $body[] = ord($c);
     }
+    // IMPORTANTE: Quitamos el 0x00 final por ahora, 
+    // algunas cámaras 2019 calculan el largo exacto del string.
+    
+    $this->info("[SEND] 0x8100 -> Respondiendo a Serial: $serial con Auth: $authStr");
+    $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
+}
+
+
 
     private function handleAuth($sock, array $phoneBcd, int $serial, int $ver, bool $is2019): void
     {
@@ -209,59 +211,50 @@ class StartMdvrServer extends Command
     /* ===================== SEND LOGIC ===================== */
 
     private function sendPacket($sock, int $msgId, array $phoneBcd, array $body, int $ver = 1, bool $is2019 = false): void
-    {
-        static $srvSerial = 1;
+{
+    static $srvSerial = 1;
 
-        // Ajustar longitud de PhoneBCD según protocolo
-        if ($is2019) {
-            $phoneBcd = array_pad(array_slice($phoneBcd, -10), -10, 0);
-        } else {
-            $phoneBcd = array_pad(array_slice($phoneBcd, -6), -6, 0);
-        }
+    // Forzamos que el Phone BCD sea EXACTAMENTE lo que la cámara envió
+    // No cortamos ni rellenamos, usamos los bytes originales del RAW IN
+    $targetPhone = $phoneBcd; 
 
-        $attr = count($body);
-        if ($is2019) $attr |= 0x4000; // Marcar bit de versión 2019
+    $attr = count($body) & 0x03FF; // Longitud real
+    if ($is2019) $attr |= 0x4000;
 
-        $packet = [
-            ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,
-            ($attr >> 8) & 0xFF,
-            $attr & 0xFF,
-        ];
+    $packet = [
+        ($msgId >> 8) & 0xFF,
+        $msgId & 0xFF,
+        ($attr >> 8) & 0xFF,
+        $attr & 0xFF,
+    ];
 
-        if ($is2019) $packet[] = $ver;
+    if ($is2019) $packet[] = $ver;
 
-        $packet = array_merge($packet, $phoneBcd, [
-            ($srvSerial >> 8) & 0xFF,
-            $srvSerial & 0xFF,
-            ...$body
-        ]);
+    $packet = array_merge($packet, $targetPhone, [
+        ($srvSerial >> 8) & 0xFF,
+        $srvSerial & 0xFF,
+        ...$body
+    ]);
 
-        $srvSerial = ($srvSerial + 1) & 0xFFFF;
+    $srvSerial = ($srvSerial + 1) & 0xFFFF;
 
-        // Checksum
-        $cs = 0;
-        foreach ($packet as $b) $cs ^= $b;
-        $packet[] = $cs;
+    $cs = 0;
+    foreach ($packet as $b) $cs ^= $b;
+    $packet[] = $cs;
 
-        // Escape de caracteres especiales
-        $escaped = [];
-        foreach ($packet as $b) {
-            if ($b === 0x7E) {
-                $escaped[] = 0x7D; $escaped[] = 0x02;
-            } elseif ($b === 0x7D) {
-                $escaped[] = 0x7D; $escaped[] = 0x01;
-            } else {
-                $escaped[] = $b;
-            }
-        }
-
-        $frame = array_merge([0x7E], $escaped, [0x7E]);
-        $out = pack('C*', ...$frame);
-
-        $this->line('[RAW OUT] ' . strtoupper(bin2hex($out)));
-        @socket_write($sock, $out);
+    $escaped = [];
+    foreach ($packet as $b) {
+        if ($b === 0x7E) { $escaped[] = 0x7D; $escaped[] = 0x02; }
+        elseif ($b === 0x7D) { $escaped[] = 0x7D; $escaped[] = 0x01; }
+        else $escaped[] = $b;
     }
+
+    $frame = array_merge([0x7E], $escaped, [0x7E]);
+    $out = pack('C*', ...$frame);
+
+    $this->line('[RAW OUT] ' . strtoupper(bin2hex($out)));
+    @socket_write($sock, $out);
+}
 
     /* ===================== UTILS ===================== */
 
