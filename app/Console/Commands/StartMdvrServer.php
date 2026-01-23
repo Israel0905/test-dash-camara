@@ -166,8 +166,10 @@ class StartMdvrServer extends Command
             $this->authCodes[$termId] = '000000'; // Default Auth Code
         }
 
-        // Auth Code: Full 12-digit ID (Standard JTT808 structure, no padding gap which was likely a manual typo)
-        $authStr = str_pad($termId, 12, '0', STR_PAD_LEFT);
+        // Auth Code: Simple "123456" + Null Terminator.
+        // Manufacturer example had "8390..." which implies a simple string.
+        // ID-based code might have been confusing.
+        $authStr = '123456';
         
         $body = [
             ($serial >> 8) & 0xFF,
