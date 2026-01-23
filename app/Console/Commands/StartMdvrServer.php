@@ -121,13 +121,6 @@ class StartMdvrServer extends Command
         $is2019 = ($attr & 0x4000) !== 0;
 
         if ($is2019) {
-            // DEBUG: Print mapping
-            $map = [];
-            for($i=0; $i<min(20, count($data)); $i++) {
-                $map[] = "$i:".str_pad(dechex($data[$i]), 2, '0', STR_PAD_LEFT);
-            }
-            $this->line('[DEBUG] Map: ' . implode(' ', $map));
-
             // Version 2019: [MsgId:2][Attr:2][Ver:1][TermId:10][Serial:2]...
             $phoneBcd = array_slice($data, 5, 10);
             $serial   = ($data[15] << 8) | $data[16];
@@ -222,6 +215,9 @@ class StartMdvrServer extends Command
 
     private function sendPacket($sock, int $msgId, array $phoneBcd, array $body, int $ver = 1, bool $is2019 = false): void
     {
+        // FORCE 2013 FORMAT for response
+        $is2019 = false;
+
         static $srvSerial = 1;
 
         $attr = count($body);
