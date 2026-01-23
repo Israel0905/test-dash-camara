@@ -227,7 +227,8 @@ class StartMdvrServer extends Command
             } else $escaped[] = $b;
         }
 
-        $frame = pack('C*', 0x7E, ...$escaped, 0x7E);
+        $frameBytes = array_merge([0x7E], $escaped, [0x7E]);
+        $frame = pack('C*', ...$frameBytes);
         $this->line('[RAW OUT] ' . strtoupper(bin2hex($frame)));
         @socket_write($sock, $frame);
     }
