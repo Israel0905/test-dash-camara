@@ -147,7 +147,8 @@ class StartMdvrServer extends Command
                 $oldSocket = $this->terminalSockets[$phoneKey];
 
                 // Solo intentamos cerrar si el socket sigue siendo una referencia válida
-                if ($oldSocket && (is_resource($oldSocket) || $oldSocket instanceof \Socket)) {
+                // Y si todavía está en nuestra lista de clientes activos (para evitar race condition)
+                if (in_array($oldSocket, $this->clients, true)) {
                     $this->warn("   -> [CLEANUP] Cerrando sesión previa para Terminal: $phoneKey");
                     $this->closeConnection($oldSocket);
                 }
@@ -247,24 +248,36 @@ class StartMdvrServer extends Command
 
     private function closeConnection($s)
     {
+        // 1. Verificación básica de existencia
         if (! $s || (! is_resource($s) && ! ($s instanceof \Socket))) {
             return; // Ya está cerrado o no es válido, ignoramos.
         }
 
         $id = spl_object_id($s);
 
-        // Intentamos cerrar con supresión de errores por si el OS ya lo cerró
-        @socket_close($s);
+        // 2. Intentamos cerrar capturando posibles errores de PHP 8+
+        try {
+            @socket_close($s);
+        } catch (\Throwable $e) {
+            // El socket ya estaba cerrado, ignoramos el error silenciosamente
+        }
 
-        // Limpiamos de la lista de clientes activos
-        $key = array_search($s, $this->clients);
+        // 3. Limpiamos la terminal de la lista de sockets activos
+        foreach ($this->terminalSockets as $terminalId => $socket) {
+            if ($socket === $s) {
+                unset($this->terminalSockets[$terminalId]);
+                break;
+            }
+        }
+
+        // 4. Limpieza de memoria del servidor
+        $key = array_search($s, $this->clients, true);
         if ($key !== false) {
             unset($this->clients[$key]);
         }
 
-        // Limpiamos buffers y protocolos
         unset($this->clientBuffers[$id], $this->clientProtocols[$id], $this->clientVersions[$id]);
 
-        $this->error("[DESC] Socket liberado (ID $id).");
+        $this->error("[DESC] Socket liberado y memoria limpia (ID $id).");
     }
 }
