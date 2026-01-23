@@ -160,12 +160,6 @@ class StartMdvrServer extends Command
                 // En un bucle foreach no usamos return, usamos continue para pasar al siguiente paquete
                 continue;
 
-            } elseif ($msgId === 0x0900) {
-                $this->comment('   -> Respondiendo Datos Transparentes (0x8900)...');
-                // La respuesta 0x8900 usa el mismo tipo de mensaje (byte 0) que envió la cámara
-                $transparentType = $body[0] ?? 0xF3;
-                $this->sendPacket($socket, 0x8900, $phoneRaw, [$transparentType]);
-
             } else {
                 $this->comment('   -> Enviando Respuesta General (0x8001)...');
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
