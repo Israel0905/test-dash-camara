@@ -169,12 +169,21 @@ class StartMdvrServer extends Command
         $body = [
             ($serial >> 8) & 0xFF,
             $serial & 0xFF,
-            0x01 // Result: 0=Success, 1=Vehicle already registered (Try 1 to stop loop)
+            0x00, // Result: 0=Success
+            0x00  // PADDING (Byte 3 according to manual Table 3.3.2)
         ];
 
-        foreach (str_split($this->authCodes[$termId]) as $c) {
+        // Auth Code "123456"
+        foreach (str_split('123456') as $c) {
             $body[] = ord($c);
         }
+
+        /*
+        // Binary Zero Auth Code (6 bytes)
+        for ($i = 0; $i < 6; $i++) {
+            $body[] = 0;
+        }
+        */
 
         $this->info('[SEND] 0x8100 Registro OK');
         $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
