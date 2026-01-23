@@ -166,15 +166,16 @@ class StartMdvrServer extends Command
             $this->authCodes[$termId] = '000000'; // Default Auth Code
         }
 
-        $authCode = '123456';
+        // Auth Code: Full 12-digit ID (Standard JTT808 structure, no padding gap which was likely a manual typo)
+        $authStr = str_pad($termId, 12, '0', STR_PAD_LEFT);
+        
         $body = [
             ($serial >> 8) & 0xFF,
             $serial & 0xFF,
-            0x00, // Result: 0=Success
-            strlen($authCode) // Byte 3: Length of Auth Code
+            0x00 // Result: 0=Success
         ];
 
-        foreach (str_split($authCode) as $c) {
+        foreach (str_split($authStr) as $c) {
             $body[] = ord($c);
         }
 
