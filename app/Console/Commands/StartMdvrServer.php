@@ -152,29 +152,32 @@ class StartMdvrServer extends Command
     /* ===================== HANDLERS ===================== */
 
     private function handleRegister($sock, array $phoneBcd, int $serial, string $termId, int $ver, bool $is2019): void
-{
-    $sid = spl_object_id($sock);
-    $this->sessions[$sid] = 'REGISTERED';
+    {
+        $sid = spl_object_id($sock);
+        $this->sessions[$sid] = 'REGISTERED';
 
-    // PRUEBA A: Usa un código simple de 6 ceros (muy común en MDVR)
-    // PRUEBA B: Si falla, cambia "000000" por $termId
-    $authStr = "000000"; 
-    
-    $body = [
-        ($serial >> 8) & 0xFF,
-        $serial & 0xFF,
-        0x00 // 00 = Éxito
-    ];
+        // 1. Usar el código del ejemplo del cliente que pasaste al principio
+        // Si este falla, probaremos con $authStr = $termId;
+        $authStr = "8390123456789"; 
+        
+        $body = [
+            ($serial >> 8) & 0xFF, // Serial recibido High
+            $serial & 0xFF,        // Serial recibido Low
+            0x00                   // Resultado 00 (Éxito)
+        ];
 
-    foreach (str_split($authStr) as $c) {
-        $body[] = ord($c);
+        // Convertir AuthCode a ASCII
+        foreach (str_split($authStr) as $c) {
+            $body[] = ord($c);
+        }
+        
+        // IMPORTANTE: En el estándar 2019, el 0x8100 NO suele llevar terminador nulo 
+        // a menos que el manual lo especifique. El ejemplo que diste tenía un 00 al final.
+        $body[] = 0x00; 
+
+        $this->info("[SEND] 0x8100 -> Respondiendo a Serial: $serial con Auth: $authStr");
+        $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
     }
-    // IMPORTANTE: Quitamos el 0x00 final por ahora, 
-    // algunas cámaras 2019 calculan el largo exacto del string.
-    
-    $this->info("[SEND] 0x8100 -> Respondiendo a Serial: $serial con Auth: $authStr");
-    $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
-}
 
 
 
