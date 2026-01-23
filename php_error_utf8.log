@@ -1,0 +1,22 @@
+﻿
+   Error 
+
+  Call to undefined function App\Console\Commands\socket_create()
+
+  at app\Console\Commands\StartMdvrServer.php:20
+     16Ôûò     public function handle(): void
+     17Ôûò     {
+     18Ôûò         $port = (int)$this->option('port');
+     19Ôûò 
+  Ô×£  20Ôûò         $server = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+     21Ôûò         socket_set_option($server, SOL_SOCKET, SO_REUSEADDR, 1);
+     22Ôûò 
+     23Ôûò         if (!socket_bind($server, '0.0.0.0', $port)) {
+     24Ôûò             $this->error('[FATAL] No se pudo bindear el puerto');
+
+  1   vendor\laravel\framework\src\Illuminate\Container\BoundMethod.php:36
+      App\Console\Commands\StartMdvrServer::handle()
+
+  2   vendor\laravel\framework\src\Illuminate\Container\Util.php:43
+      Illuminate\Container\BoundMethod::Illuminate\Container\{closure}()
+

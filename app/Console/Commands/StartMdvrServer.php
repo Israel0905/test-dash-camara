@@ -175,6 +175,8 @@ class StartMdvrServer extends Command
         $body = [
             ($serial >> 8) & 0xFF,
             $serial & 0xFF,
+            0x01, // MsgId High
+            0x02, // MsgId Low (0x0102)
             0x00
         ];
 
