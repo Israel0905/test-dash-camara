@@ -117,21 +117,31 @@ class StartMdvrServer extends Command
         }
 
         $msgId = ($data[0] << 8) | $data[1];
+        $attr  = ($data[2] << 8) | $data[3];
+        $is2019 = ($attr & 0x4000) !== 0;
 
-        // ULV REAL: terminal phone empieza en byte 6, longitud 10 BCD
-        $phoneBcd = array_slice($data, 6, 10);
-        $serial   = ($data[16] << 8) | $data[17];
-        $termId   = $this->bcdToString($phoneBcd);
+        if ($is2019) {
+            // Version 2019: [MsgId:2][Attr:2][Ver:1][TermId:10][Serial:2]...
+            $phoneBcd = array_slice($data, 5, 10);
+            $serial   = ($data[15] << 8) | $data[16];
+        } else {
+            // Version 2013: [MsgId:2][Attr:2][TermId:6][Serial:2]...
+            $phoneBcd = array_slice($data, 4, 6);
+            $serial   = ($data[10] << 8) | $data[11];
+        }
+
+        $termId = $this->bcdToString($phoneBcd);
 
         $sid = spl_object_id($sock);
 
         $this->info(sprintf(
-            '[RECV] Sock=%d Msg=0x%04X Serial=%d Term=%s State=%s',
+            '[RECV] Sock=%d Msg=0x%04X Serial=%d Term=%s State=%s Ver=%s',
             $sid,
             $msgId,
             $serial,
             $termId,
-            $this->sessions[$sid] ?? 'NONE'
+            $this->sessions[$sid] ?? 'NONE',
+            $is2019 ? '2019' : '2013'
         ));
 
         if ($msgId === 0x0100) {
