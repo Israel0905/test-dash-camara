@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\ProcessMdvrLocation;
 use Illuminate\Console\Command;
 
 class StartMdvrServer extends Command
@@ -10,8 +11,10 @@ class StartMdvrServer extends Command
 
     protected $description = 'Servidor JT/T 808 compatible con Ultravision N6 (2011/2019)';
 
-    protected $clientSerials = [];
+    // Seriales persistentes por ID de Terminal (Teléfono)
+    protected $terminalSerials = [];
 
+    // Buffers y Protocolos por Socket ID (Sesión TCP actual)
     protected $clientBuffers = [];
 
     protected $clientProtocols = [];
@@ -45,7 +48,6 @@ class StartMdvrServer extends Command
                         if ($newClient) {
                             $clients[] = $newClient;
                             $clientId = spl_object_id($newClient);
-                            $this->clientSerials[$clientId] = 0;
                             $this->clientBuffers[$clientId] = '';
                             $this->clientProtocols[$clientId] = '2019';
                             $this->warn("[CONN] Cámara conectada (ID $clientId).");
@@ -110,7 +112,7 @@ class StartMdvrServer extends Command
 
             if (count($data) < 12) {
                 continue;
-            } // Validación mínima tras unescape
+            }
 
             $payload = array_slice($data, 1, -2);
             $msgId = ($payload[0] << 8) | $payload[1];
@@ -136,7 +138,11 @@ class StartMdvrServer extends Command
 
             $body = array_slice($payload, $headerLen);
 
-            $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d', $this->clientProtocols[$clientId], $msgId, $devSerial));
+            // Convertir Phone a Hex para logs y serial persistence
+            $phoneHex = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+
+            $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d | Terminal: %s',
+                $this->clientProtocols[$clientId], $msgId, $devSerial, $phoneHex));
 
             // --- RESPUESTAS ---
             if ($msgId === 0x0100) {
@@ -146,22 +152,38 @@ class StartMdvrServer extends Command
 
                 continue;
             } else {
-                // Confirmación General para 0x0102, 0x0002, 0x0200, etc.
-                // Y para 0x0900 (Evitar Reset)
+                // Confirmación General para TODOS (evita timeouts)
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+
+                // --- PROCESAMIENTO ASÍNCRONO ---
+                if ($msgId === 0x0200) {
+                    $bodyHex = bin2hex(pack('C*', ...$body));
+                    $this->info('   -> [QUEUE] Enviando GPS a ProcessMdvrLocation...');
+                    ProcessMdvrLocation::dispatch($phoneHex, $bodyHex);
+                }
             }
         }
+    }
+
+    private function getNextSerial($phoneKey)
+    {
+        if (! isset($this->terminalSerials[$phoneKey])) {
+            $this->terminalSerials[$phoneKey] = 0;
+        }
+        $current = $this->terminalSerials[$phoneKey];
+        $this->terminalSerials[$phoneKey] = ($current + 1) % 65535;
+
+        return $current;
     }
 
     private function respondRegistration($socket, $phoneRaw, $devSerial, $body)
     {
         $authCode = '123456';
         $responseBody = [
-            ($devSerial >> 8) & 0xFF, // Reply Serial High
-            $devSerial & 0xFF,        // Reply Serial Low
-            0x00,                     // Result: Success
+            ($devSerial >> 8) & 0xFF,
+            $devSerial & 0xFF,
+            0x00,
         ];
-
         foreach (str_split($authCode) as $char) {
             $responseBody[] = ord($char);
         }
@@ -177,7 +199,7 @@ class StartMdvrServer extends Command
             $deviceSerial & 0xFF,
             ($replyMsgId >> 8) & 0xFF,
             $replyMsgId & 0xFF,
-            0x00, // Success
+            0x00,
         ];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
@@ -199,16 +221,18 @@ class StartMdvrServer extends Command
             $header[] = $b;
         }
 
-        $srvSerial = $this->clientSerials[spl_object_id($socket)];
+        // USA SERIAL PERSISTENTE POR TELÉFONO
+        $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+        $srvSerial = $this->getNextSerial($phoneKey);
+
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
-        $this->clientSerials[spl_object_id($socket)] = ($srvSerial + 1) % 65535;
 
         $full = array_merge($header, $body);
         $cs = 0;
         foreach ($full as $byte) {
             $cs ^= $byte;
-        } // Checksum XOR
+        }
         $full[] = $cs;
 
         $final = [0x7E];
@@ -233,7 +257,8 @@ class StartMdvrServer extends Command
     {
         $id = spl_object_id($s);
         @socket_close($s);
-        unset($clients[array_search($s, $clients)], $this->clientSerials[$id], $this->clientBuffers[$id], $this->clientProtocols[$id]);
+        // NO BORRAMOS terminalSerials para soportar reconexión
+        unset($clients[array_search($s, $clients)], $this->clientBuffers[$id], $this->clientProtocols[$id]);
         $this->error("[DESC] Cámara desconectada (ID $id).");
     }
 }
