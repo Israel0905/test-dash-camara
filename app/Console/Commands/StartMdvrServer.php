@@ -215,6 +215,14 @@ class StartMdvrServer extends Command
 
     private function sendPacket($sock, int $msgId, array $phoneBcd, array $body, int $ver = 1, bool $is2019 = false): void
     {
+        // HYBRID FIX: Force 2013 response explicitly
+        $is2019 = false;
+
+        // If pretending to be 2013, we must truncate PhoneBCD to 6 bytes
+        if (!$is2019 && count($phoneBcd) > 6) {
+            $phoneBcd = array_slice($phoneBcd, -6);
+        }
+
         static $srvSerial = 1;
 
         $attr = count($body);
