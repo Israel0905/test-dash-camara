@@ -7,7 +7,7 @@ use Illuminate\Console\Command;
 class StartMdvrServer extends Command
 {
     protected $signature = 'mdvr:start {--port=8809}';
-    protected $description = 'Servidor JT/T808-2019 ULV MDVR (PHP 8.x estable)';
+    protected $description = 'Servidor JT/T808-2019 ULV MDVR (Estándar corregido)';
 
     private array $buffers = [];
     private array $sessions = [];
@@ -106,7 +106,7 @@ class StartMdvrServer extends Command
         $this->line('[RAW IN ] ' . strtoupper(bin2hex($raw)));
 
         $data = $this->unescape($raw);
-        if (count($data) < 20) return;
+        if (count($data) < 15) return; // Mínimo para un header básico
 
         $recvCs = array_pop($data);
         $calcCs = 0;
@@ -121,37 +121,31 @@ class StartMdvrServer extends Command
         $is2019 = ($attr & 0x4000) !== 0;
 
         if ($is2019) {
-            // Version 2019: [MsgId:2][Attr:2][Ver:1][TermId:10][Serial:2]...
+            // 2019: [ID:2][Attr:2][Ver:1][TermId:10][Serial:2]
+            $ver      = $data[4];
             $phoneBcd = array_slice($data, 5, 10);
             $serial   = ($data[15] << 8) | $data[16];
         } else {
-            // Version 2013: [MsgId:2][Attr:2][TermId:6][Serial:2]...
+            // 2013: [ID:2][Attr:2][TermId:6][Serial:2]
+            $ver      = 0; 
             $phoneBcd = array_slice($data, 4, 6);
             $serial   = ($data[10] << 8) | $data[11];
         }
         
-        $this->line('[DEBUG] PhoneBCD Hex: ' . strtoupper(bin2hex(pack('C*', ...$phoneBcd))));
-
         $termId = $this->bcdToString($phoneBcd);
-
         $sid = spl_object_id($sock);
 
         $this->info(sprintf(
-            '[RECV] Sock=%d Msg=0x%04X Serial=%d Term=%s State=%s Ver=%s',
-            $sid,
-            $msgId,
-            $serial,
-            $termId,
-            $this->sessions[$sid] ?? 'NONE',
-            $is2019 ? '2019' : '2013'
+            '[RECV] Msg=0x%04X Serial=%d Term=%s Ver=%s',
+            $msgId, $serial, $termId, $is2019 ? '2019' : '2013'
         ));
 
         if ($msgId === 0x0100) {
-            $this->handleRegister($sock, $phoneBcd, $serial, $termId, $data[4] ?? 1, $is2019);
+            $this->handleRegister($sock, $phoneBcd, $serial, $termId, $ver, $is2019);
         } elseif ($msgId === 0x0102) {
-            $this->handleAuth($sock, $phoneBcd, $serial, $data[4] ?? 1, $is2019);
+            $this->handleAuth($sock, $phoneBcd, $serial, $ver, $is2019);
         } else {
-            $this->handleGeneral($sock, $phoneBcd, $serial, $msgId, $data[4] ?? 1, $is2019);
+            $this->handleGeneral($sock, $phoneBcd, $serial, $msgId, $ver, $is2019);
         }
     }
 
@@ -162,34 +156,23 @@ class StartMdvrServer extends Command
         $sid = spl_object_id($sock);
         $this->sessions[$sid] = 'REGISTERED';
 
-        if (!isset($this->authCodes[$termId])) {
-            $this->authCodes[$termId] = '000000'; // Default Auth Code
-        }
-
-        // Auth Code: Simple "123456" + Null Terminator.
-        // Manufacturer example had "8390..." which implies a simple string.
-        // ID-based code might have been confusing.
-        $authStr = '123456';
+        // Según tu ejemplo: "AUTH0000001115"
+        $authStr = "AUTH0000001115"; 
         
+        // Cuerpo del mensaje 0x8100
         $body = [
-            ($serial >> 8) & 0xFF,
+            ($serial >> 8) & 0xFF, // Serial de respuesta (el que recibimos)
             $serial & 0xFF,
-            0x00 // Result: 0=Success
+            0x00                   // Resultado: 0 = Éxito
         ];
 
+        // Añadir Auth Code como ASCII
         foreach (str_split($authStr) as $c) {
             $body[] = ord($c);
         }
-        $body[] = 0x00; // Null Terminator (Required based on manufacturer example)
+        $body[] = 0x00; // Terminador Nulo requerido por el fabricante
 
-        /*
-        // Binary Zero Auth Code (6 bytes)
-        for ($i = 0; $i < 6; $i++) {
-            $body[] = 0;
-        }
-        */
-
-        $this->info('[SEND] 0x8100 Registro OK');
+        $this->info("[SEND] 0x8100 Registro Exitoso. AuthCode: $authStr");
         $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
     }
 
@@ -200,9 +183,9 @@ class StartMdvrServer extends Command
         $body = [
             ($serial >> 8) & 0xFF,
             $serial & 0xFF,
-            0x01, // MsgId High
-            0x02, // MsgId Low (0x0102)
-            0x00
+            0x01, // MsgId High (0x01)
+            0x02, // MsgId Low (0x02) -> Respondiendo a 0102
+            0x00  // Éxito
         ];
 
         $this->info('[SEND] 0x8001 Auth OK');
@@ -211,8 +194,7 @@ class StartMdvrServer extends Command
 
     private function handleGeneral($sock, array $phoneBcd, int $serial, int $msgId, int $ver, bool $is2019): void
     {
-        if (($this->sessions[spl_object_id($sock)] ?? '') !== 'ONLINE') return;
-
+        // Respuesta genérica 0x8001 para otros mensajes
         $body = [
             ($serial >> 8) & 0xFF,
             $serial & 0xFF,
@@ -224,33 +206,21 @@ class StartMdvrServer extends Command
         $this->sendPacket($sock, 0x8001, $phoneBcd, $body, $ver, $is2019);
     }
 
-    /* ===================== SEND ===================== */
+    /* ===================== SEND LOGIC ===================== */
 
     private function sendPacket($sock, int $msgId, array $phoneBcd, array $body, int $ver = 1, bool $is2019 = false): void
     {
         static $srvSerial = 1;
 
-        // SANITIZE: Ensure PhoneBCD is strict length
+        // Ajustar longitud de PhoneBCD según protocolo
         if ($is2019) {
-            // 2019: 10 bytes
-            if (count($phoneBcd) < 10) {
-                $phoneBcd = array_pad($phoneBcd, -10, 0); // Left pad
-            } elseif (count($phoneBcd) > 10) {
-                $phoneBcd = array_slice($phoneBcd, -10); // Take last 10
-            }
+            $phoneBcd = array_pad(array_slice($phoneBcd, -10), -10, 0);
         } else {
-            // 2013: 6 bytes
-            if (count($phoneBcd) < 6) {
-                $phoneBcd = array_pad($phoneBcd, -6, 0);
-            } elseif (count($phoneBcd) > 6) {
-                $phoneBcd = array_slice($phoneBcd, -6);
-            }
+            $phoneBcd = array_pad(array_slice($phoneBcd, -6), -6, 0);
         }
 
         $attr = count($body);
-        if ($is2019) {
-            $attr |= 0x4000;
-        }
+        if ($is2019) $attr |= 0x4000; // Marcar bit de versión 2019
 
         $packet = [
             ($msgId >> 8) & 0xFF,
@@ -259,9 +229,7 @@ class StartMdvrServer extends Command
             $attr & 0xFF,
         ];
 
-        if ($is2019) {
-            $packet[] = $ver;
-        }
+        if ($is2019) $packet[] = $ver;
 
         $packet = array_merge($packet, $phoneBcd, [
             ($srvSerial >> 8) & 0xFF,
@@ -271,19 +239,21 @@ class StartMdvrServer extends Command
 
         $srvSerial = ($srvSerial + 1) & 0xFFFF;
 
+        // Checksum
         $cs = 0;
         foreach ($packet as $b) $cs ^= $b;
         $packet[] = $cs;
 
+        // Escape de caracteres especiales
         $escaped = [];
         foreach ($packet as $b) {
             if ($b === 0x7E) {
-                $escaped[] = 0x7D;
-                $escaped[] = 0x02;
+                $escaped[] = 0x7D; $escaped[] = 0x02;
             } elseif ($b === 0x7D) {
-                $escaped[] = 0x7D;
-                $escaped[] = 0x01;
-            } else $escaped[] = $b;
+                $escaped[] = 0x7D; $escaped[] = 0x01;
+            } else {
+                $escaped[] = $b;
+            }
         }
 
         $frame = array_merge([0x7E], $escaped, [0x7E]);
@@ -299,7 +269,6 @@ class StartMdvrServer extends Command
     {
         $bytes = array_values(unpack('C*', $raw));
         $out = [];
-
         for ($i = 0; $i < count($bytes); $i++) {
             if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
                 $out[] = ($bytes[++$i] === 0x01) ? 0x7D : 0x7E;
@@ -314,8 +283,7 @@ class StartMdvrServer extends Command
     {
         $s = '';
         foreach ($bcd as $b) {
-            $s .= ($b >> 4) & 0x0F;
-            $s .= $b & 0x0F;
+            $s .= sprintf('%02x', $b);
         }
         return ltrim($s, '0');
     }
