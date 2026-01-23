@@ -41,8 +41,8 @@ class StartMdvrServer extends Command
                         $newClient = socket_accept($socket);
                         if ($newClient) {
                             $clients[] = $newClient;
-                            $this->clientSerials[(int) $newClient] = 0; // Iniciar en 0 para esta cámara
-                            $this->warn('[CONN] Cámara conectada (ID '.(int) $newClient.').');
+                            $this->clientSerials[spl_object_id($newClient)] = 0; // Iniciar en 0 para esta cámara
+                            $this->warn('[CONN] Cámara conectada (ID '.spl_object_id($newClient).').');
                         }
                     } else {
                         $input = @socket_read($s, 4096);
@@ -51,8 +51,8 @@ class StartMdvrServer extends Command
                         } else {
                             socket_close($s);
                             unset($clients[array_search($s, $clients)]);
-                            unset($this->clientSerials[(int) $s]); // Borrar serial
-                            $this->error('[DESC] Cámara desconectada (ID '.(int) $s.').');
+                            unset($this->clientSerials[spl_object_id($s)]); // Borrar serial
+                            $this->error('[DESC] Cámara desconectada (ID '.spl_object_id($s).').');
                         }
                     }
                 }
@@ -232,13 +232,13 @@ class StartMdvrServer extends Command
         }
 
         // Serial del Servidor (Independiente por cliente)
-        $srvSerial = $this->clientSerials[(int) $socket] ?? 0;
+        $srvSerial = $this->clientSerials[spl_object_id($socket)] ?? 0;
 
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
 
         // Incrementar y guardar para el siguiente mensaje de ESTA cámara
-        $this->clientSerials[(int) $socket] = ($srvSerial + 1) % 65535;
+        $this->clientSerials[spl_object_id($socket)] = ($srvSerial + 1) % 65535;
 
         // =====================================================
         // DEBUG: Mostrar Header y Body por separado
@@ -306,5 +306,11 @@ class StartMdvrServer extends Command
 
         $this->comment('   -> Confirmando mensaje 0x'.sprintf('%04X', $replyMsgId));
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+    }
+
+    // Placeholder for parseLocation if not implemented
+    private function parseLocation($body)
+    {
+        $this->comment('   -> Location data parsed (placeholder)');
     }
 }
