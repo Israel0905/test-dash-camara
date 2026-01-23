@@ -156,23 +156,23 @@ class StartMdvrServer extends Command
         $sid = spl_object_id($sock);
         $this->sessions[$sid] = 'REGISTERED';
 
-        // Según tu ejemplo: "AUTH0000001115"
-        $authStr = "AUTH0000001115"; 
+        // 1. Usar el código de autenticación EXACTO del ejemplo del cliente
+        $authStr = "8390123456789"; 
         
-        // Cuerpo del mensaje 0x8100
+        // 2. CONSTRUCCIÓN DEL CUERPO (Message Body)
         $body = [
-            ($serial >> 8) & 0xFF, // Serial de respuesta (el que recibimos)
+            ($serial >> 8) & 0xFF, // Debe ser el serial que RECIBISTE (0000 en tu primer log)
             $serial & 0xFF,
             0x00                   // Resultado: 0 = Éxito
         ];
 
-        // Añadir Auth Code como ASCII
+        // 3. Añadir Auth Code en ASCII
         foreach (str_split($authStr) as $c) {
             $body[] = ord($c);
         }
-        $body[] = 0x00; // Terminador Nulo requerido por el fabricante
+        $body[] = 0x00; // Terminador Nulo (El ejemplo del cliente lo tiene)
 
-        $this->info("[SEND] 0x8100 Registro Exitoso. AuthCode: $authStr");
+        $this->info("[SEND] 0x8100 -> Respondiendo al Serial del cliente: $serial");
         $this->sendPacket($sock, 0x8100, $phoneBcd, $body, $ver, $is2019);
     }
 
