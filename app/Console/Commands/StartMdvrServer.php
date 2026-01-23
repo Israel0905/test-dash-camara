@@ -125,8 +125,8 @@ class StartMdvrServer extends Command
             // --- DYNAMIC HEADER PARSING ---
             if ($is2019) {
                 $phoneRaw = array_slice($payload, 5, 10);
-                $devSerial = ($payload[15] << 8) | $payload[16];
-                $headerLen = 17;
+                $devSerial = ($payload[16] << 8) | $payload[17];
+                $headerLen = 18;
             } else {
                 $phoneRaw = array_slice($payload, 4, 6);
                 $devSerial = ($payload[10] << 8) | $payload[11];
@@ -153,7 +153,7 @@ class StartMdvrServer extends Command
                 continue;
             } else {
                 // Confirmación General para TODOS (evita timeouts)
-                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId, $is2019);
 
                 // --- PROCESAMIENTO ASÍNCRONO ---
                 if ($msgId === 0x0200) {
@@ -201,7 +201,7 @@ class StartMdvrServer extends Command
             $replyMsgId & 0xFF,
             0x00,
         ];
-        $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+        $this->sendPacket($socket, 0x8001, $phoneRaw, $body, $is2019);
     }
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
