@@ -146,9 +146,8 @@ class StartMdvrServer extends Command
 
             // --- RESPUESTAS ---
             if ($msgId === 0x0100) {
-                // FIX CRÍTICO: Resetear SIEMPRE en registro.
-                // Evita que el servidor mande seriales altos (ej. 18) a una sesión nueva.
-                $this->terminalSerials[$phoneHex] = 0;
+                // FIX: Eliminamos reset manual para permitir que el serial incremente (0, 1, 2...)
+                // esto rompe el bucle de "Duplicate Packet" si la cámara reintenta.
                 
                 $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
             } elseif ($msgId === 0x0001) {
