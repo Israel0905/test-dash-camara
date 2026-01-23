@@ -262,7 +262,8 @@ class StartMdvrServer extends Command
             }
         }
 
-        $out = pack('C*', 0x7E, ...$escaped, 0x7E);
+        $frame = array_merge([0x7E], $escaped, [0x7E]);
+        $out = pack('C*', ...$frame);
         $hexOut = strtoupper(bin2hex($out));
 
         $this->line("[RAW OUT] {$hexOut}");
