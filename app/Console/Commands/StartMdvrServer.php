@@ -166,15 +166,15 @@ class StartMdvrServer extends Command
             $this->authCodes[$termId] = '000000'; // Default Auth Code
         }
 
+        $authCode = '123456';
         $body = [
             ($serial >> 8) & 0xFF,
             $serial & 0xFF,
             0x00, // Result: 0=Success
-            0x00  // PADDING (Byte 3 according to manual Table 3.3.2)
+            strlen($authCode) // Byte 3: Length of Auth Code
         ];
 
-        // Auth Code "123456"
-        foreach (str_split('123456') as $c) {
+        foreach (str_split($authCode) as $c) {
             $body[] = ord($c);
         }
 
