@@ -13,6 +13,8 @@ class StartMdvrServer extends Command
     // NUEVO: Array para guardar el serial de cada cámara conectada
     protected $clientSerials = [];
 
+    protected $clientBuffers = []; // NUEVO: Memoria para paquetes incompletos
+
     public function handle()
     {
         $port = $this->option('port');
@@ -42,16 +44,19 @@ class StartMdvrServer extends Command
                         if ($newClient) {
                             $clients[] = $newClient;
                             $this->clientSerials[spl_object_id($newClient)] = 0; // Iniciar en 0 para esta cámara
+                            $this->clientBuffers[spl_object_id($newClient)] = ''; // Iniciar búfer vacío
                             $this->warn('[CONN] Cámara conectada (ID '.spl_object_id($newClient).').');
                         }
                     } else {
                         $input = @socket_read($s, 4096);
                         if ($input) {
-                            $this->processBuffer($s, $input);
+                            $this->clientBuffers[spl_object_id($s)] .= $input;
+                            $this->processBuffer($s);
                         } else {
                             socket_close($s);
                             unset($clients[array_search($s, $clients)]);
                             unset($this->clientSerials[spl_object_id($s)]); // Borrar serial
+                            unset($this->clientBuffers[spl_object_id($s)]); // Borrar búfer
                             $this->error('[DESC] Cámara desconectada (ID '.spl_object_id($s).').');
                         }
                     }
@@ -60,27 +65,47 @@ class StartMdvrServer extends Command
         }
     }
 
-    private function processBuffer($socket, $input)
+    private function processBuffer($socket)
     {
-        // 1. DIVIDIR EL BUFFER: Cortamos la cadena cada vez que aparece el byte 0x7E
-        $rawPackets = explode(chr(0x7E), $input);
+        $buffer = &$this->clientBuffers[spl_object_id($socket)];
 
-        // Filtramos los fragmentos vacíos (que quedan entre dos 7E juntos: 7E7E)
-        $validPackets = array_filter($rawPackets, function ($p) {
-            return strlen($p) > 10; // Un paquete JTT808 válido sin 7Es tiene más de 10 bytes
-        });
+        while (true) {
+            // Buscar el primer 7E (Inicio)
+            $start = strpos($buffer, chr(0x7E));
+            if ($start === false) {
+                $buffer = ''; // Basura, limpiamos
+                break;
+            }
 
-        // 2. PROCESAR CADA PAQUETE INDIVIDUALMENTE
-        foreach ($validPackets as $packetData) {
-            // Reconstruimos el paquete con sus 7E para que la lógica de Unescape funcione igual
-            $singlePacket = chr(0x7E).$packetData.chr(0x7E);
+            // Buscar el segundo 7E (Fin) a partir de la siguiente posición
+            $end = strpos($buffer, chr(0x7E), $start + 1);
+            if ($end === false) {
+                // Tenemos un inicio pero no un fin. El paquete está incompleto.
+                // Rompemos el bucle y esperamos a la siguiente lectura del socket.
+                break;
+            }
 
+            // ¡Tenemos un paquete completo! Lo extraemos.
+            $packetLength = $end - $start + 1;
+            $singlePacket = substr($buffer, $start, $packetLength);
+
+            // Cortamos el búfer para quitar el paquete que ya procesamos
+            $buffer = substr($buffer, $end + 1);
+
+            // Si el paquete es muy corto (ej: "7E 7E"), lo ignoramos
+            if (strlen($singlePacket) < 15) {
+                continue;
+            }
+
+            // ===============================================
+            // A PARTIR DE AQUÍ ES EXACTAMENTE TU CÓDIGO ACTUAL
+            // ===============================================
             $rawHex = strtoupper(bin2hex($singlePacket));
             $this->line("\n<fg=yellow>[RAW RECV]</>: ".implode(' ', str_split($rawHex, 2)));
 
             $bytes = array_values(unpack('C*', $singlePacket));
 
-            // --- UNESCAPE (Tu código original) ---
+            // --- UNESCAPE ---
             $data = [];
             for ($i = 0; $i < count($bytes); $i++) {
                 if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
@@ -115,11 +140,15 @@ class StartMdvrServer extends Command
 
             $this->info(sprintf(
                 '[INFO] ID: 0x%04X | Serial: %d | Phone: %s',
-                $msgId, $devSerial, $phone
+                $msgId,
+                $devSerial,
+                $phone
             ));
 
             // --- RESPUESTAS ---
             $phoneRaw = array_slice($payload, 5, 10);
+            $phoneHex = implode(' ', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+            $this->line("   Phone RAW (para respuesta): <fg=cyan>$phoneHex</>");
 
             if ($msgId === 0x0100) {
                 $this->comment('   -> Procesando Registro...');
@@ -133,6 +162,7 @@ class StartMdvrServer extends Command
 
             } elseif ($msgId === 0x0900) {
                 $this->comment('   -> Respondiendo Datos Transparentes (0x8900)...');
+                // La respuesta 0x8900 usa el mismo tipo de mensaje (byte 0) que envió la cámara
                 $transparentType = $body[0] ?? 0xF3;
                 $this->sendPacket($socket, 0x8900, $phoneRaw, [$transparentType]);
 
@@ -322,7 +352,6 @@ class StartMdvrServer extends Command
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
 
-    // Placeholder for parseLocation if not implemented
     private function parseLocation($body)
     {
         $this->comment('   -> Location data parsed (placeholder)');
