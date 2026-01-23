@@ -14,14 +14,15 @@ class StartMdvrServer extends Command
     // Seriales persistentes por ID de Terminal (Teléfono)
     protected $terminalSerials = [];
 
-    // Buffers y Protocolos por Socket ID (Sesión TCP actual)
+    // Buffers y Protocolos por Socket ID
     protected $clientBuffers = [];
 
     protected $clientProtocols = [];
 
-    protected $clients = [];          // Added: Track all active sockets
+    protected $clients = [];
 
-    protected $terminalSockets = [];  // Added: Track socket by Terminal ID for cleanup
+    // Rastreo de sockets activos por Terminal para evitar duplicados (Socket Flapping)
+    protected $terminalSockets = [];
 
     public function handle()
     {
@@ -39,8 +40,6 @@ class StartMdvrServer extends Command
         socket_listen($socket);
         $this->info('=====================================================');
         $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port");
-        $this->info('=====================================================');
-
         $this->info('=====================================================');
 
         $this->clients = [$socket];
@@ -91,7 +90,7 @@ class StartMdvrServer extends Command
 
             $packetLength = $end - $start + 1;
             $singlePacket = substr($buffer, $start, $packetLength);
-            $buffer = substr($buffer, $end); // Soporte para delimitador compartido
+            $buffer = substr($buffer, $end);
 
             if (strlen($singlePacket) < 12) {
                 continue;
@@ -99,7 +98,7 @@ class StartMdvrServer extends Command
 
             $this->line("\n<fg=yellow>[RAW RECV]</>: ".strtoupper(bin2hex($singlePacket)));
 
-            // --- UNESCAPE ---
+            // --- UNESCAPE (Sección 2.1 del manual) ---
             $bytes = array_values(unpack('C*', $singlePacket));
             $data = [];
             for ($i = 0; $i < count($bytes); $i++) {
@@ -116,19 +115,14 @@ class StartMdvrServer extends Command
                 }
             }
 
-            if (count($data) < 12) {
-                continue;
-            }
-
             $payload = array_slice($data, 1, -2);
             $msgId = ($payload[0] << 8) | $payload[1];
             $attr = ($payload[2] << 8) | $payload[3];
             $is2019 = ($attr >> 14) & 0x01;
-            $hasSub = ($attr >> 13) & 0x01;
 
             $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
 
-            // --- DYNAMIC HEADER PARSING ---
+            // --- PARSING DEL ENCABEZADO (Tabla 2.2.2-1) ---
             if ($is2019) {
                 $phoneRaw = array_slice($payload, 5, 10);
                 $devSerial = ($payload[15] << 8) | $payload[16];
@@ -138,71 +132,36 @@ class StartMdvrServer extends Command
                 $devSerial = ($payload[10] << 8) | $payload[11];
                 $headerLen = 12;
             }
-            if ($hasSub) {
-                $headerLen += 4;
-            }
-
             $body = array_slice($payload, $headerLen);
-
-            // Convertir Phone a Hex para logs y serial persistence
             $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
-            $phoneHex = $phoneKey; // Mantener compatibilidad con variable usada en logs
 
-            // --- CLEANUP DUPLICATE SESSIONS (FIX SOCKET FLAPPING) ---
-            // Si ya existe un socket registrado para esta terminal y es diferente al actual, lo cerramos.
-            if (isset($this->terminalSockets[$phoneHex]) && $this->terminalSockets[$phoneHex] !== $socket) {
-                $oldSocket = $this->terminalSockets[$phoneHex];
-                // Verificamos si sigue en la lista de clientes activos antes de intentar cerrar
-                if (in_array($oldSocket, $this->clients, true)) {
-                    $this->warn("   -> [CLEANUP] Cerrando socket duplicado/fantasma para Terminal: $phoneHex");
-                    $this->closeConnection($oldSocket);
-                }
+            // --- EVITAR SESIONES DUPLICADAS (Fix Flapping) ---
+            if (isset($this->terminalSockets[$phoneKey]) && $this->terminalSockets[$phoneKey] !== $socket) {
+                $oldSocket = $this->terminalSockets[$phoneKey];
+                $this->warn("   -> [CLEANUP] Cerrando socket fantasma para terminal $phoneKey");
+                $this->closeConnection($oldSocket);
             }
-            $this->terminalSockets[$phoneHex] = $socket; // Registramos el socket actual como el válido
+            $this->terminalSockets[$phoneKey] = $socket;
 
             $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d | Terminal: %s',
-                $this->clientProtocols[$clientId], $msgId, $devSerial, $phoneHex));
+                $this->clientProtocols[$clientId], $msgId, $devSerial, $phoneKey));
 
-            // --- RESPUESTAS ---
+            // --- RESPUESTAS (Handshake Lógico del Manual) ---
             if ($msgId === 0x0100) {
-                // RESET CONDICIONAL: Solo si la cámara empieza de 0 (nueva sesión real).
-                // Si es un reintento (serial 1, 2...), NO reseteamos para mantener la secuencia.
+                // Si la cámara re-inicia (Serial 0), nosotros también.
                 if ($devSerial === 0) {
                     $this->terminalSerials[$phoneKey] = 0;
-                    $this->info('   -> [RESET] Nueva sesión detectada (Serial 0). Secuencia reiniciada.');
                 }
-
-                $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
-            } elseif ($msgId === 0x0001) {
-                $this->info('   -> [OK] La cámara confirmó nuestro mensaje.');
-
-                continue;
+                $this->respondRegistration($socket, $phoneRaw, $devSerial);
             } elseif ($msgId === 0x0102) {
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-
-                // Enviamos una configuración de intervalo de latido (Heartbeat) a 30s para estabilizar sesión.
-                // Mensaje 0x8103: Set Terminal Parameters
-                // Body: [Count=1] [ID=0x00000001] [Len=4] [Value=30]
-                $paramBody = [
-                    0x01,                   // Cantidad de parámetros: 1
-                    0x00, 0x00, 0x00, 0x01, // ID Parámetro: Heartbeat Interval
-                    0x04,                   // Longitud: 4 bytes
-                    0x00, 0x00, 0x00, 0x1E,  // Valor: 30 segundos
-                ];
-                $this->info('   -> Configurando Parámetros (0x8103) para evitar desconexión...');
-                $this->sendPacket($socket, 0x8103, $phoneRaw, $paramBody);
-
-                // FIX: Eliminamos 0x8104 para evitar sobrecargar la negociación inicial o causar loops en puerto 8810
-                // Nos basamos solo en 0x8103 (Heartbeat) para estabilizar.
+                // Handshake obligatorio para evitar timeout (Sección 3.17)
+                $this->info('   -> Enviando Configuración Inicial (0x8103)...');
+                $this->sendPacket($socket, 0x8103, $phoneRaw, [0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x1E]);
             } else {
-                // Confirmación General para TODOS (evita timeouts)
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-
-                // --- PROCESAMIENTO ASÍNCRONO ---
                 if ($msgId === 0x0200) {
-                    $bodyHex = bin2hex(pack('C*', ...$body));
-                    $this->info('   -> [QUEUE] Enviando GPS a ProcessMdvrLocation...');
-                    ProcessMdvrLocation::dispatch($phoneHex, $bodyHex);
+                    ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
                 }
             }
         }
@@ -210,40 +169,25 @@ class StartMdvrServer extends Command
 
     private function getNextSerial($phoneKey)
     {
-        if (! isset($this->terminalSerials[$phoneKey])) {
-            $this->terminalSerials[$phoneKey] = 0;
-        }
-        $current = $this->terminalSerials[$phoneKey];
+        $current = $this->terminalSerials[$phoneKey] ?? 0;
         $this->terminalSerials[$phoneKey] = ($current + 1) % 65535;
 
         return $current;
     }
 
-    private function respondRegistration($socket, $phoneRaw, $devSerial, $body)
+    private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
-        $authCode = "123456\0"; // Terminador nulo requerido por N6
-        $responseBody = [
-            ($devSerial >> 8) & 0xFF,
-            $devSerial & 0xFF,
-            0x00,
-        ];
+        $authCode = "123456\0"; // Formato del archivo 8100消息解析 decode.txt
+        $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x00];
         foreach (str_split($authCode) as $char) {
-            $responseBody[] = ord($char);
+            $body[] = ord($char);
         }
-
-        $this->info('   -> Enviando Respuesta Registro (0x8100)...');
-        $this->sendPacket($socket, 0x8100, $phoneRaw, $responseBody);
+        $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
 
-    private function respondGeneral($socket, $phoneRaw, $deviceSerial, $replyMsgId)
+    private function respondGeneral($socket, $phoneRaw, $devSerial, $replyId)
     {
-        $body = [
-            ($deviceSerial >> 8) & 0xFF,
-            $deviceSerial & 0xFF,
-            ($replyMsgId >> 8) & 0xFF,
-            $replyMsgId & 0xFF,
-            0x00,
-        ];
+        $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, ($replyId >> 8) & 0xFF, $replyId & 0xFF, 0x00];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
 
@@ -251,7 +195,8 @@ class StartMdvrServer extends Command
     {
         $protocol = $this->clientProtocols[spl_object_id($socket)] ?? '2019';
         $attr = count($body);
-        $header = [];
+        $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+        $srvSerial = $this->getNextSerial($phoneKey);
 
         if ($protocol === '2019') {
             $attr |= 0x4000;
@@ -263,18 +208,13 @@ class StartMdvrServer extends Command
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
-
-        // USA SERIAL PERSISTENTE POR TELÉFONO
-        $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
-        $srvSerial = $this->getNextSerial($phoneKey);
-
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
 
         $full = array_merge($header, $body);
         $cs = 0;
-        foreach ($full as $byte) {
-            $cs ^= $byte;
+        foreach ($full as $b) {
+            $cs ^= $b;
         }
         $full[] = $cs;
 
@@ -300,13 +240,10 @@ class StartMdvrServer extends Command
     {
         $id = spl_object_id($s);
         @socket_close($s);
-        // NO BORRAMOS terminalSerials para soportar reconexión
-
         $key = array_search($s, $this->clients);
         if ($key !== false) {
             unset($this->clients[$key]);
         }
-
         unset($this->clientBuffers[$id], $this->clientProtocols[$id]);
         $this->error("[DESC] Cámara desconectada (ID $id).");
     }
