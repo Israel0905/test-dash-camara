@@ -19,6 +19,10 @@ class StartMdvrServer extends Command
 
     protected $clientProtocols = [];
 
+    protected $clients = [];          // Added: Track all active sockets
+
+    protected $terminalSockets = [];  // Added: Track socket by Terminal ID for cleanup
+
     public function handle()
     {
         $port = $this->option('port');
@@ -37,16 +41,18 @@ class StartMdvrServer extends Command
         $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port");
         $this->info('=====================================================');
 
-        $clients = [$socket];
+        $this->info('=====================================================');
+
+        $this->clients = [$socket];
         while (true) {
-            $read = $clients;
+            $read = $this->clients;
             $write = $except = null;
             if (socket_select($read, $write, $except, 0, 1000000) > 0) {
                 foreach ($read as $s) {
                     if ($s === $socket) {
                         $newClient = socket_accept($socket);
                         if ($newClient) {
-                            $clients[] = $newClient;
+                            $this->clients[] = $newClient;
                             $clientId = spl_object_id($newClient);
                             $this->clientBuffers[$clientId] = '';
                             $this->clientProtocols[$clientId] = '2019';
@@ -58,7 +64,7 @@ class StartMdvrServer extends Command
                             $this->clientBuffers[spl_object_id($s)] .= $input;
                             $this->processBuffer($s);
                         } else {
-                            $this->closeConnection($s, $clients);
+                            $this->closeConnection($s);
                         }
                     }
                 }
@@ -141,6 +147,18 @@ class StartMdvrServer extends Command
             // Convertir Phone a Hex para logs y serial persistence
             $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
             $phoneHex = $phoneKey; // Mantener compatibilidad con variable usada en logs
+
+            // --- CLEANUP DUPLICATE SESSIONS (FIX SOCKET FLAPPING) ---
+            // Si ya existe un socket registrado para esta terminal y es diferente al actual, lo cerramos.
+            if (isset($this->terminalSockets[$phoneHex]) && $this->terminalSockets[$phoneHex] !== $socket) {
+                $oldSocket = $this->terminalSockets[$phoneHex];
+                // Verificamos si sigue en la lista de clientes activos antes de intentar cerrar
+                if (in_array($oldSocket, $this->clients, true)) {
+                    $this->warn("   -> [CLEANUP] Cerrando socket duplicado/fantasma para Terminal: $phoneHex");
+                    $this->closeConnection($oldSocket);
+                }
+            }
+            $this->terminalSockets[$phoneHex] = $socket; // Registramos el socket actual como el válido
 
             $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d | Terminal: %s',
                 $this->clientProtocols[$clientId], $msgId, $devSerial, $phoneHex));
@@ -279,12 +297,18 @@ class StartMdvrServer extends Command
         $this->line('<fg=green>[SEND HEX]</>: '.strtoupper(bin2hex(pack('C*', ...$final))));
     }
 
-    private function closeConnection($s, &$clients)
+    private function closeConnection($s)
     {
         $id = spl_object_id($s);
         @socket_close($s);
         // NO BORRAMOS terminalSerials para soportar reconexión
-        unset($clients[array_search($s, $clients)], $this->clientBuffers[$id], $this->clientProtocols[$id]);
+
+        $key = array_search($s, $this->clients);
+        if ($key !== false) {
+            unset($this->clients[$key]);
+        }
+
+        unset($this->clientBuffers[$id], $this->clientProtocols[$id]);
         $this->error("[DESC] Cámara desconectada (ID $id).");
     }
 }
