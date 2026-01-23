@@ -155,6 +155,12 @@ class StartMdvrServer extends Command
                 $this->info('   -> [OK] La cámara confirmó nuestro mensaje.');
 
                 continue;
+            } elseif ($msgId === 0x0102) {
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+
+                // IMPORTANTE: Handshake para mantener viva la sesión
+                $this->info('   -> Enviando Consulta de Parámetros (0x8104) para evitar Timeout...');
+                $this->sendPacket($socket, 0x8104, $phoneRaw, []);
             } else {
                 // Confirmación General para TODOS (evita timeouts)
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
@@ -182,7 +188,7 @@ class StartMdvrServer extends Command
 
     private function respondRegistration($socket, $phoneRaw, $devSerial, $body)
     {
-        $authCode = '123456';
+        $authCode = "123456\0"; // Terminador nulo requerido por N6
         $responseBody = [
             ($devSerial >> 8) & 0xFF,
             $devSerial & 0xFF,
