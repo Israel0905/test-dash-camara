@@ -180,7 +180,7 @@ class StartMdvrServer extends Command
         $this->sessions[spl_object_id($sock)] = 'REGISTERED';
 
         if (!isset($this->authCodes[$termId])) {
-            $this->authCodes[$termId] = $termId;
+            $this->authCodes[$termId] = '';
         }
 
         $body = [
