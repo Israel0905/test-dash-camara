@@ -129,6 +129,8 @@ class StartMdvrServer extends Command
             $phoneBcd = array_slice($data, 4, 6);
             $serial   = ($data[10] << 8) | $data[11];
         }
+        
+        $this->line('[DEBUG] PhoneBCD Hex: ' . strtoupper(bin2hex(pack('C*', ...$phoneBcd))));
 
         $termId = $this->bcdToString($phoneBcd);
 
@@ -161,7 +163,7 @@ class StartMdvrServer extends Command
         $this->sessions[$sid] = 'REGISTERED';
 
         if (!isset($this->authCodes[$termId])) {
-            $this->authCodes[$termId] = $termId; // ULV usa el terminal ID como auth
+            $this->authCodes[$termId] = '123456'; // FIXED AUTH CODE FOR DEBUGGING
         }
 
         $body = [
@@ -277,6 +279,6 @@ class StartMdvrServer extends Command
             $s .= ($b >> 4) & 0x0F;
             $s .= $b & 0x0F;
         }
-        return ltrim($s, '0');
+        return $s; // Removed ltrim for debugging
     }
 }
