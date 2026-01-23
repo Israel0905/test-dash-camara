@@ -10,6 +10,9 @@ class StartMdvrServer extends Command
 
     protected $description = 'Servidor JT/T 808 para Ultravision N6 - Debug Mode';
 
+    // NUEVO: Array para guardar el serial de cada cámara conectada
+    protected $clientSerials = [];
+
     public function handle()
     {
         $port = $this->option('port');
@@ -35,8 +38,12 @@ class StartMdvrServer extends Command
             if (socket_select($read, $write, $except, 0, 1000000) > 0) {
                 foreach ($read as $s) {
                     if ($s === $socket) {
-                        $clients[] = socket_accept($socket);
-                        $this->warn('[CONN] Cámara conectada.');
+                        $newClient = socket_accept($socket);
+                        if ($newClient) {
+                            $clients[] = $newClient;
+                            $this->clientSerials[(int) $newClient] = 0; // Iniciar en 0 para esta cámara
+                            $this->warn('[CONN] Cámara conectada (ID '.(int) $newClient.').');
+                        }
                     } else {
                         $input = @socket_read($s, 4096);
                         if ($input) {
@@ -44,7 +51,8 @@ class StartMdvrServer extends Command
                         } else {
                             socket_close($s);
                             unset($clients[array_search($s, $clients)]);
-                            $this->error('[DESC] Cámara desconectada.');
+                            unset($this->clientSerials[(int) $s]); // Borrar serial
+                            $this->error('[DESC] Cámara desconectada (ID '.(int) $s.').');
                         }
                     }
                 }
@@ -110,6 +118,12 @@ class StartMdvrServer extends Command
         if ($msgId === 0x0100) {
             $this->comment('   -> Procesando Registro...');
             $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
+        } elseif ($msgId === 0x0900) {
+            // NUEVO: Respuesta específica para 0x0900
+            $this->comment('   -> Respondiendo Datos Transparentes (0x8900)...');
+            // La respuesta 0x8900 usa el mismo tipo de mensaje (byte 0) que envió la cámara
+            $transparentType = $body[0] ?? 0xF3;
+            $this->sendPacket($socket, 0x8900, $phoneRaw, [$transparentType]);
         } else {
             $this->comment('   -> Enviando Respuesta General (0x8001)...');
             $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
@@ -217,11 +231,14 @@ class StartMdvrServer extends Command
             $header[] = $b;
         }
 
-        // Serial del Servidor (Independiente)
-        static $srvSerial = 1;
+        // Serial del Servidor (Independiente por cliente)
+        $srvSerial = $this->clientSerials[(int) $socket] ?? 0;
+
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
-        $srvSerial = ($srvSerial + 1) % 65535;
+
+        // Incrementar y guardar para el siguiente mensaje de ESTA cámara
+        $this->clientSerials[(int) $socket] = ($srvSerial + 1) % 65535;
 
         // =====================================================
         // DEBUG: Mostrar Header y Body por separado
