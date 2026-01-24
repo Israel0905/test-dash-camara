@@ -164,7 +164,7 @@ class StartMdvrServer extends Command
                 // Esto asegura que respondamos con Serial de Servidor 0 y la cámara acepte el paquete.
                 if ($devSerial === 0) {
                     $this->terminalSerials[$phoneKey] = 0;
-                    $this->info('   -> [RESET] Nueva sesión física. Secuencia del servidor reiniciada a 0.');
+                    $this->info('   -> [RESET] Forzando inicio de secuencia a 0.');
                 }
 
                 $this->respondRegistration($socket, $phoneRaw, $devSerial);
