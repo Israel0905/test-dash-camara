@@ -168,6 +168,12 @@ class StartMdvrServer extends Command
                 }
 
                 $this->respondRegistration($socket, $phoneRaw, $devSerial);
+            } elseif ($msgId === 0x0001) {
+                // IMPORTANTE: Solo logueamos, NO respondemos con 0x8001.
+                // Esto rompe el bucle de desconexión "Ack al Ack".
+                $this->info('   -> [OK] La cámara confirmó nuestro mensaje.');
+
+                continue;
             } elseif ($msgId === 0x0102) {
                 $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                 // Handshake obligatorio para evitar timeout (Sección 3.17)

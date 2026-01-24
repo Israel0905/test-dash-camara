@@ -75,8 +75,21 @@ class ProcessMdvrLocation implements ShouldQueue
         
         $fields = unpack('Nalarm/Nstatus/Nlat/Nlon/nalt/nspeed/ndir', substr($binaryData, 0, 26));
         
+        $status = $fields['status'];
         $lat = $fields['lat'] / 1000000;
         $lon = $fields['lon'] / 1000000;
+
+        // Bit 2: 0=North, 1=South (South is negative)
+        if ($status & 0x00000004) {
+            $lat = $lat * -1;
+        }
+
+        // Bit 3: 0=East, 1=West (West is negative)
+        // Para México (Oeste), este bit debería estar en 1.
+        if ($status & 0x00000008) {
+            $lon = $lon * -1;
+        }
+        
         $speed = $fields['speed'] / 10; // En km/h
         
         // Time BCD (6 bytes)
@@ -88,8 +101,5 @@ class ProcessMdvrLocation implements ShouldQueue
         );
 
         \Illuminate\Support\Facades\Log::info("   -> GPS: Lat: $lat, Lon: $lon, Speed: $speed, Time: $datetime");
-        
-        // TODO: Guardar en base de datos
-        // \App\Models\GpsPosition::create([...]);
     }
 }
