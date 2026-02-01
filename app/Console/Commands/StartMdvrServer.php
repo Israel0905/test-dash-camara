@@ -9,17 +9,21 @@ class StartMdvrServer extends Command
 {
     protected $signature = 'mdvr:start {--port=8809}';
 
-    protected $description = 'Servidor JT/T 808 compatible con Ultravision N6 (2019)';
+    protected $description = 'Servidor JT/T 808 compatible con Ultravision N6 (2011/2019)';
 
-    // Seriales persistentes por ID de Terminal
+    // Seriales persistentes por ID de Terminal (Teléfono)
     protected $terminalSerials = [];
 
-    // Buffers por Socket ID
+    // Buffers y Protocolos por Socket ID
     protected $clientBuffers = [];
+
+    protected $clientProtocols = [];
 
     protected $clients = [];
 
-    // Rastreo de sockets activos por Terminal
+    protected $clientVersions = []; // Track protocol version byte
+
+    // Rastreo de sockets activos por Terminal para evitar duplicados (Socket Flapping)
     protected $terminalSockets = [];
 
     // Cache de autenticación por terminal
@@ -39,7 +43,7 @@ class StartMdvrServer extends Command
 
         socket_listen($socket);
         $this->info('=====================================================');
-        $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port (Protocolo 2019)");
+        $this->info("[DEBUG MDVR] ESCUCHANDO EN PUERTO $port");
         $this->info('=====================================================');
 
         $this->clients = [$socket];
@@ -54,6 +58,8 @@ class StartMdvrServer extends Command
                             $this->clients[] = $newClient;
                             $clientId = spl_object_id($newClient);
                             $this->clientBuffers[$clientId] = '';
+                            $this->clientProtocols[$clientId] = '2019';
+                            $this->clientVersions[$clientId] = 0x01; // Default 2019 version
                             $this->warn("[CONN] Cámara conectada (ID $clientId).");
                         }
                     } else {
@@ -117,102 +123,93 @@ class StartMdvrServer extends Command
             // Quitar 0x7E inicial y final
             $payload = array_slice($data, 1, -2);
             
-            // Parsear header (Table 2.2.2 - Protocolo 2019)
-            // Header de 17 bytes para 2019
-            if (count($payload) < 17) {
-                $this->error("   -> [ERROR] Paquete demasiado corto: " . count($payload) . " bytes");
-                continue;
-            }
-            
+            // Parsear header (Table 2.2.2)
             $msgId = ($payload[0] << 8) | $payload[1];
             $attr = ($payload[2] << 8) | $payload[3];
-            $protocolVersion = $payload[4]; // Byte de versión de protocolo (inicial 1)
-            $phoneRaw = array_slice($payload, 5, 10); // BCD[10] = 10 bytes
-            $devSerial = ($payload[15] << 8) | $payload[16];
-            $headerLen = 17;
+            $is2019 = ($attr >> 14) & 0x01;
+            $bodyLength = $attr & 0x03FF; // 10 bits para longitud
+
+            $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
+
+            // --- PARSING DEL ENCABEZADO (Tabla 2.2.2-1) ---
+            if ($is2019) {
+                // Versión 2019: header de 17 bytes
+                $this->clientVersions[$clientId] = $payload[4] ?? 0x01;
+                $phoneRaw = array_slice($payload, 5, 10);
+                $devSerial = ($payload[15] << 8) | $payload[16];
+                $headerLen = 17;
+            } else {
+                // Versión 2011: header de 12 bytes
+                $phoneRaw = array_slice($payload, 4, 6);
+                $devSerial = ($payload[10] << 8) | $payload[11];
+                $headerLen = 12;
+            }
             
             $body = array_slice($payload, $headerLen);
-            
-            // Convertir número de terminal a string para identificarlo
-            $phoneHex = '';
-            foreach ($phoneRaw as $byte) {
-                $phoneHex .= sprintf('%02X', $byte);
-            }
-            $phoneKey = $phoneHex;
-            
-            // Mostrar número de terminal de forma legible (BCD)
-            $phoneBCD = '';
-            foreach ($phoneRaw as $byte) {
-                // Convertir byte BCD a dos dígitos decimales
-                $high = ($byte >> 4) & 0x0F;
-                $low = $byte & 0x0F;
-                $phoneBCD .= $high . $low;
-            }
-            $phoneBCD = ltrim($phoneBCD, '0');
+            $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+            $phoneStr = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
 
-            // --- EVITAR SESIONES DUPLICADAS ---
-            if (isset($this->terminalSockets[$phoneKey]) && 
-                $this->terminalSockets[$phoneKey] !== $socket) {
+            // --- EVITAR SESIONES DUPLICADAS (Fix Flapping) ---
+            if (isset($this->terminalSockets[$phoneKey]) && $this->terminalSockets[$phoneKey] !== $socket) {
                 $oldSocket = $this->terminalSockets[$phoneKey];
                 if (in_array($oldSocket, $this->clients, true)) {
-                    $this->warn("   -> [CLEANUP] Cerrando sesión previa para Terminal: $phoneBCD");
+                    $this->warn("   -> [CLEANUP] Cerrando sesión previa para Terminal: $phoneKey");
                     $this->closeConnection($oldSocket);
                 }
             }
             $this->terminalSockets[$phoneKey] = $socket;
 
-            $this->info(sprintf('[INFO] ID: 0x%04X | Serial: %d | Terminal: %s',
-                $msgId, $devSerial, $phoneBCD));
+            $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d | Terminal: %s',
+                $this->clientProtocols[$clientId], $msgId, $devSerial, $phoneKey));
 
-            // --- MANEJO DE MENSAJES ---
-            switch ($msgId) {
-                case 0x0100: // Registro (Table 3.3.1)
-                    $this->info('   -> [REG] Registro recibido');
-                    if ($devSerial === 0) {
-                        $this->terminalSerials[$phoneKey] = 0;
-                        $this->info('   -> [RESET] Forzando inicio de secuencia a 0.');
-                    }
-                    $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
-                    break;
-                    
-                case 0x0001: // Confirmación (Table 3.1.1)
-                    $this->info('   -> [ACK] Confirmación recibida');
-                    break;
-                    
-                case 0x0102: // Autenticación (Table 3.4)
-                    $this->info('   -> [AUTH] Autenticación recibida');
-                    $this->processAuthentication($socket, $phoneRaw, $devSerial, $body);
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    break;
-                    
-                case 0x0900: // Datos transparentes (Table 3.10.1)
-                    $this->info('   -> [TRANSP] Datos transparentes recibidos');
-                    $this->processTransparentData($body);
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    break;
-                    
-                case 0x0704: // Reporte de ubicación en lote (Table 3.6.1)
-                    $this->info('   -> [BATCH] Reporte de ubicación en lote');
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    $this->processLocationBatch($phoneKey, $body);
-                    break;
-                    
-                case 0x0200: // Reporte de ubicación individual (Table 3.5.1)
-                    $this->info('   -> [LOC] Reporte de ubicación individual');
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    // Despachar job para procesar ubicación
-                    ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
-                    break;
-                    
-                case 0x0002: // Heartbeat (Table 3.2)
-                    $this->info('   -> [HEART] Heartbeat recibido');
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    break;
-                    
-                default:
-                    $this->info("   -> [UNKNOWN] Mensaje no manejado (0x" . sprintf('%04X', $msgId) . ")");
-                    // Responder con respuesta general para cualquier mensaje no manejado
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+            // --- MANEJO DE MENSAJES SEGÚN PROTOCOLO ULTRAVISION ---
+            if ($msgId === 0x0100) {
+                // Mensaje de registro (Table 3.3.1)
+                $this->info('   -> [REG] Registro recibido');
+                if ($devSerial === 0) {
+                    $this->terminalSerials[$phoneKey] = 0;
+                    $this->info('   -> [RESET] Forzando inicio de secuencia a 0.');
+                }
+                $this->respondRegistration($socket, $phoneRaw, $devSerial, $body);
+                
+            } elseif ($msgId === 0x0001) {
+                // Confirmación del dispositivo (Table 3.1.1)
+                $this->info('   -> [ACK] La cámara confirmó nuestro mensaje.');
+                continue;
+                
+            } elseif ($msgId === 0x0102) {
+                // Autenticación (Table 3.4)
+                $this->info('   -> [AUTH] Autenticación recibida');
+                $this->processAuthentication($socket, $phoneRaw, $devSerial, $body);
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                
+            } elseif ($msgId === 0x0900) {
+                // Datos transparentes (Table 3.10.1)
+                $this->info('   -> [TRANSP] Datos transparentes recibidos');
+                $this->processTransparentData($socket, $phoneRaw, $devSerial, $body);
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                
+            } elseif ($msgId === 0x0704) {
+                // Reporte de ubicación en lote (Table 3.6.1)
+                $this->info('   -> [BATCH] Reporte de ubicación en lote');
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                $this->processLocationBatch($socket, $phoneKey, $body);
+                
+            } elseif ($msgId === 0x0200) {
+                // Reporte de ubicación individual (Table 3.5.1)
+                $this->info('   -> [LOC] Reporte de ubicación individual');
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
+                
+            } elseif ($msgId === 0x0002) {
+                // Heartbeat (Table 3.2)
+                $this->info('   -> [HEART] Heartbeat recibido');
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                
+            } else {
+                // Otros mensajes - respuesta general
+                $this->info("   -> [UNKNOWN] Mensaje no manejado específicamente");
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
             }
         }
     }
@@ -227,21 +224,15 @@ class StartMdvrServer extends Command
     private function respondRegistration($socket, $phoneRaw, $devSerial, $body)
     {
         // Table 3.3.2 - Respuesta a registro (0x8100)
-        // 1. Reply serial number (2 bytes)
+        // 1. Reply serial number (2 bytes) - Serial del mensaje recibido
         // 2. Result (1 byte) - 0=success
-        // 3. Authentication code (STRING) - máximo 8 bytes
+        // 3. Authentication code (STRING)
         
-        // Convertir phoneRaw a string BCD
-        $phoneBCD = '';
-        foreach ($phoneRaw as $byte) {
-            $high = ($byte >> 4) & 0x0F;
-            $low = $byte & 0x0F;
-            $phoneBCD .= $high . $low;
-        }
-        $phoneBCD = ltrim($phoneBCD, '0');
+        $phoneStr = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
         
+        // Generar código de autenticación basado en el ID del terminal
         // En tu log exitoso, usabas "992001" (el ID del terminal)
-        $authCode = $phoneBCD; // Ejemplo: "992001"
+        $authCode = $phoneStr; // "992001"
         
         $responseBody = [
             ($devSerial >> 8) & 0xFF,  // Reply serial high
@@ -250,17 +241,9 @@ class StartMdvrServer extends Command
         ];
         
         // Agregar código de autenticación (máx 8 bytes según especificación)
-        $authBytes = [];
-        for ($i = 0; $i < strlen($authCode); $i++) {
-            $authBytes[] = ord($authCode[$i]);
+        for ($i = 0; $i < 8; $i++) {
+            $responseBody[] = isset($authCode[$i]) ? ord($authCode[$i]) : 0x00;
         }
-        
-        // Rellenar con 0x00 si es necesario (hasta 8 bytes)
-        while (count($authBytes) < 8) {
-            $authBytes[] = 0x00;
-        }
-        
-        $responseBody = array_merge($responseBody, $authBytes);
         
         $this->authCodes[implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw))] = $authCode;
         $this->info("   -> [REG] 0x8100 enviado. Auth code: $authCode");
@@ -271,7 +254,7 @@ class StartMdvrServer extends Command
     {
         // Table 3.4 - Procesar autenticación
         // Byte 0: Authentication code length
-        // Byte 1+: Authentication code content (STRING)
+        // Byte 1+: Authentication code content
         // Luego: Terminal IMEI (15 bytes)
         // Luego: Firmware version (20 bytes)
         
@@ -283,19 +266,19 @@ class StartMdvrServer extends Command
             }
             $this->info("   -> [AUTH] Código recibido: $authCode");
             
-            // Verificar código contra el esperado
-            $phoneHex = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
-            $expectedCode = $this->authCodes[$phoneHex] ?? '';
-            
+            // Verificar código (en tu caso, debería ser "992001")
+            $expectedCode = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
             if ($authCode === $expectedCode) {
                 $this->info("   -> [AUTH] Código válido");
+                // Enviar configuración inicial opcionalmente
+                // $this->sendInitialConfiguration($socket, $phoneRaw);
             } else {
-                $this->error("   -> [AUTH] Código inválido. Recibido: '$authCode', Esperado: '$expectedCode'");
+                $this->error("   -> [AUTH] Código inválido: $authCode, esperado: $expectedCode");
             }
         }
     }
 
-    private function processTransparentData($body)
+    private function processTransparentData($socket, $phoneRaw, $devSerial, $body)
     {
         // Table 3.10.1 - Datos transparentes
         if (count($body) > 0) {
@@ -325,7 +308,7 @@ class StartMdvrServer extends Command
         }
     }
 
-    private function processLocationBatch($phoneKey, $body)
+    private function processLocationBatch($socket, $phoneKey, $body)
     {
         // Table 3.6.1 - Procesar reporte de ubicación en lote
         if (count($body) >= 3) {
@@ -333,7 +316,8 @@ class StartMdvrServer extends Command
             $dataType = $body[2];
             $this->info("   -> [BATCH] Número de items: $dataItemCount, Tipo: $dataType");
             
-            // Procesar cada bloque de datos
+            // Aquí puedes procesar cada bloque de datos de ubicación
+            // Cada bloque comienza en offset 3
             $offset = 3;
             for ($i = 0; $i < $dataItemCount && $offset < count($body); $i++) {
                 if ($offset + 2 <= count($body)) {
@@ -341,8 +325,8 @@ class StartMdvrServer extends Command
                     $offset += 2;
                     
                     if ($offset + $itemLength <= count($body)) {
-                        // Aquí puedes procesar cada bloque de ubicación
-                        // Similar al mensaje 0x0200
+                        // $itemData = array_slice($body, $offset, $itemLength);
+                        // Procesar datos de ubicación (similar a 0x0200)
                         $offset += $itemLength;
                     } else {
                         break;
@@ -350,6 +334,26 @@ class StartMdvrServer extends Command
                 }
             }
         }
+    }
+
+    private function sendInitialConfiguration($socket, $phoneRaw)
+    {
+        // Comando 0x8103 - Configuración de parámetros (Table 3.17.1)
+        // Enviar configuración inicial (opcional)
+        $params = [
+            0x00, 0x01, 0x00, 0x02, 0x00, 0x3C, // 0x0001: Heartbeat interval (60 segundos)
+            0x00, 0x29, 0x00, 0x02, 0x00, 0x0A, // 0x0029: Parking report interval (10 segundos)
+            0x00, 0x30, 0x00, 0x02, 0x00, 0x01, // 0x0030: Moving report interval (1 segundo)
+        ];
+        
+        $paramCount = count($params) / 6;
+        $body = [$paramCount];
+        foreach ($params as $byte) {
+            $body[] = $byte;
+        }
+        
+        $this->info("   -> [CFG] Enviando configuración inicial");
+        $this->sendPacket($socket, 0x8103, $phoneRaw, $body);
     }
 
     private function respondGeneral($socket, $phoneRaw, $devSerial, $replyId)
@@ -372,22 +376,35 @@ class StartMdvrServer extends Command
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
+        $clientId = spl_object_id($socket);
+        $protocol = $this->clientProtocols[$clientId] ?? '2019';
+        $protocolVersion = $this->clientVersions[$clientId] ?? 0x01;
+        
         $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
         $srvSerial = $this->getNextSerial($phoneKey);
         
-        // Construir header para protocolo 2019 (17 bytes)
+        // Construir header según Table 2.2.2
         $attr = count($body);
-        $attr |= 0x4000;  // Bit 14 = 1 (versión 2019)
         
-        $header = [
-            ($msgId >> 8) & 0xFF,
-            $msgId & 0xFF,
-            ($attr >> 8) & 0xFF,
-            $attr & 0xFF,
-            0x01,  // Protocol version byte (fijo a 1 para 2019)
-        ];
+        if ($protocol === '2019') {
+            $attr |= 0x4000;  // Bit 14 = 1 (versión 2019)
+            $header = [
+                ($msgId >> 8) & 0xFF,
+                $msgId & 0xFF,
+                ($attr >> 8) & 0xFF,
+                $attr & 0xFF,
+                $protocolVersion,  // Protocol version byte
+            ];
+        } else {
+            $header = [
+                ($msgId >> 8) & 0xFF,
+                $msgId & 0xFF,
+                ($attr >> 8) & 0xFF,
+                $attr & 0xFF,
+            ];
+        }
         
-        // Terminal phone number (BCD[10])
+        // Terminal phone number (BCD[10] o BCD[6])
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
@@ -425,7 +442,7 @@ class StartMdvrServer extends Command
         @socket_write($socket, pack('C*', ...$final));
         $hex = strtoupper(bin2hex(pack('C*', ...$final)));
         $this->line("<fg=green>[SEND HEX]</>: $hex");
-        $this->info("   -> [SEND] 0x" . sprintf('%04X', $msgId) . " | Serial: $srvSerial");
+        $this->info("   -> [SEND] 0x" . sprintf('%04X', $msgId) . " | Serial: $srvSerial | Len: " . count($body));
     }
 
     private function closeConnection($s)
@@ -456,7 +473,7 @@ class StartMdvrServer extends Command
             unset($this->clients[$key]);
         }
 
-        unset($this->clientBuffers[$id]);
+        unset($this->clientBuffers[$id], $this->clientProtocols[$id], $this->clientVersions[$id]);
 
         $this->error("[DESC] Socket liberado y memoria limpia (ID $id).");
     }
