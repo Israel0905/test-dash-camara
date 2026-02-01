@@ -128,27 +128,34 @@ class StartMdvrServer extends Command
             // --- LÓGICA DE RESPUESTA ---
             switch ($msgId) {
                 case 0x0100: // Registro
-                    // AJUSTE 1: Forzar reset de secuencia a 0 en cada intento de registro
-                    $this->terminalSerials[$phoneKey] = 0;
-                    $this->deviceStates[$phoneKey] = 'REGISTERED';
-                    $this->info('   -> [STATE] REGISTRO: Reset de Serial a 0.');
+                    if (($this->deviceStates[$phoneKey] ?? '') === 'AUTHENTICATED') {
+                        $this->info("   -> [SKIP] Ya autenticado, reenviando respuesta de registro.");
+                    } else {
+                        $this->deviceStates[$phoneKey] = 'REGISTERED';
+                        $this->terminalSerials[$phoneKey] = 0; 
+                        $this->info('   -> [STATE] REGISTRADO.');
+                    }
                     $this->respondRegistration($socket, $phoneRaw, $devSerial);
                     break;
 
                 case 0x0102: // Autenticación
                     $this->deviceStates[$phoneKey] = 'AUTHENTICATED';
-                    $this->info('   -> [STATE] AUTENTICADO.');
+                    $this->info('   -> [STATE] AUTENTICADO. Link OK.');
                     $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                     break;
 
-                case 0x0200: // Ubicación
-                case 0x0704: // Ubicación en lote (Pesado)
-                    // AJUSTE 2: Responder ACK DE INMEDIATO antes de procesar para evitar Timeout
+                case 0x0200: // Ubicación tiempo real
+                case 0x0704: // Ubicación en lote (históricos)
+                    // MODIFICACIÓN: Responder inmediatamente (Quick ACK)
                     $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    $this->info("   -> [ACK QUICK] Ubicación confirmada.");
+                    $this->info("   -> [QUICK ACK] Ubicación recibida y confirmada.");
                     
-                    // Procesar asíncronamente
+                    // Procesar después de haber respondido
                     ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
+                    break;
+
+                case 0x0001: // ACK de la cámara
+                    $this->info('   -> [OK] Ack recibido.');
                     break;
 
                 case 0x0002: // Heartbeat
@@ -157,6 +164,7 @@ class StartMdvrServer extends Command
                     break;
 
                 default:
+                    // Enviar respuesta general para cualquier otro comando desconocido
                     $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
                     break;
             }
@@ -172,7 +180,7 @@ class StartMdvrServer extends Command
 
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
-        $authCode = "992001"; // Usamos el ID como código para simplificar
+        $authCode = "123456";
         $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x00];
         foreach (str_split($authCode) as $char) { $body[] = ord($char); }
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
@@ -189,8 +197,6 @@ class StartMdvrServer extends Command
         $clientId = spl_object_id($socket);
         $protocol = $this->clientProtocols[$clientId] ?? '2019';
         $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
-        
-        // Obtenemos el serial para este paquete
         $srvSerial = $this->getNextSerial($phoneKey);
 
         $attr = count($body);
@@ -227,16 +233,20 @@ class StartMdvrServer extends Command
     {
         if (!$s || (!is_resource($s) && !($s instanceof \Socket))) return;
         $id = spl_object_id($s);
+        
         foreach ($this->terminalSockets as $terminalId => $socket) {
             if ($socket === $s) {
                 unset($this->terminalSockets[$terminalId]);
+                unset($this->deviceStates[$terminalId]);
                 break;
             }
         }
+
         $key = array_search($s, $this->clients, true);
         if ($key !== false) unset($this->clients[$key]);
+        
         @socket_close($s);
         unset($this->clientBuffers[$id], $this->clientProtocols[$id], $this->clientVersions[$id]);
-        $this->error("[DESC] Socket cerrado (ID $id).");
+        $this->error("[DESC] Socket liberado (ID $id).");
     }
 }
