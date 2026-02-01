@@ -35,6 +35,11 @@ class StartMdvrServer extends Command
     // Contador de intentos de registro por terminal
     protected $registrationAttempts = [];
 
+    // Contadores para estadísticas
+    protected $processedCount = 0;
+    protected $lastCleanupTime = 0;
+    protected $packetTiming = [];
+
     public function handle()
     {
         $port = $this->option('port');
@@ -79,6 +84,9 @@ class StartMdvrServer extends Command
                     }
                 }
             }
+            
+            // Limpieza periódica cada 30 segundos
+            $this->periodicCleanup();
         }
     }
 
@@ -87,7 +95,17 @@ class StartMdvrServer extends Command
         $clientId = spl_object_id($socket);
         $buffer = &$this->clientBuffers[$clientId];
 
-        while (true) {
+        // Proteger contra buffers demasiado grandes
+        if (strlen($buffer) > 65536) {
+            $this->error("   -> [ERR] Buffer excesivo (" . strlen($buffer) . " bytes), limpiando");
+            $buffer = '';
+            return;
+        }
+
+        $packetsProcessed = 0;
+        $maxPacketsPerCycle = 100; // Límite para evitar bloqueos
+
+        while ($packetsProcessed < $maxPacketsPerCycle) {
             $start = strpos($buffer, chr(0x7E));
             if ($start === false) {
                 $buffer = '';
@@ -101,95 +119,143 @@ class StartMdvrServer extends Command
 
             $packetLength = $end - $start + 1;
             $singlePacket = substr($buffer, $start, $packetLength);
-            $buffer = substr($buffer, $end + 1);
+            
+            // Extraer el paquete procesado del buffer
+            $buffer = substr($buffer, 0, $start) . substr($buffer, $end + 1);
 
             if (strlen($singlePacket) < 12) {
                 continue;
             }
 
-            $this->line("\n<fg=yellow>[RAW IN ]</> " . strtoupper(bin2hex($singlePacket)));
-
-            // --- UNESCAPE ---
-            $bytes = array_values(unpack('C*', $singlePacket));
-            $unescaped = [];
+            $packetsProcessed++;
+            $this->processedCount++;
             
-            for ($i = 0; $i < count($bytes); $i++) {
-                if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
-                    if ($bytes[$i + 1] === 0x01) {
-                        $unescaped[] = 0x7D;
-                        $i++;
-                    } elseif ($bytes[$i + 1] === 0x02) {
-                        $unescaped[] = 0x7E;
-                        $i++;
-                    } else {
-                        $unescaped[] = $bytes[$i];
-                    }
+            // Estadísticas cada 50 paquetes
+            if ($this->processedCount % 50 === 0) {
+                $this->info("   -> [STATS] Total paquetes procesados: $this->processedCount");
+                $this->logBufferSizes();
+            }
+
+            $this->line("\n<fg=yellow>[RAW IN ]</> " . strtoupper(bin2hex($singlePacket)));
+            
+            // Medir tiempo de procesamiento
+            $processingStart = microtime(true);
+            
+            $this->processSinglePacket($socket, $singlePacket);
+            
+            $processingTime = microtime(true) - $processingStart;
+            $this->packetTiming[] = $processingTime;
+            
+            // Advertencia si el procesamiento es lento
+            if ($processingTime > 0.01) { // Más de 10ms
+                $this->warn("   -> [PERF] Procesamiento lento: " . round($processingTime * 1000, 2) . "ms");
+            }
+        }
+        
+        if ($packetsProcessed >= $maxPacketsPerCycle) {
+            $this->warn("   -> [WARN] Límite de $maxPacketsPerCycle paquetes por ciclo alcanzado");
+        }
+    }
+
+    private function processSinglePacket($socket, $packetData)
+    {
+        // --- UNESCAPE ---
+        $bytes = array_values(unpack('C*', $packetData));
+        $unescaped = [];
+        
+        for ($i = 0; $i < count($bytes); $i++) {
+            if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
+                if ($bytes[$i + 1] === 0x01) {
+                    $unescaped[] = 0x7D;
+                    $i++;
+                } elseif ($bytes[$i + 1] === 0x02) {
+                    $unescaped[] = 0x7E;
+                    $i++;
                 } else {
                     $unescaped[] = $bytes[$i];
                 }
-            }
-
-            // Eliminar 0x7E inicial y final
-            $packetData = array_slice($unescaped, 1, -2);
-            
-            if (count($packetData) < 12) {
-                continue;
-            }
-
-            // Parsear header
-            $msgId = ($packetData[0] << 8) | $packetData[1];
-            $attr = ($packetData[2] << 8) | $packetData[3];
-            $is2019 = ($attr >> 14) & 0x01;
-            $bodyLength = $attr & 0x03FF;
-
-            $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
-
-            if ($is2019) {
-                $this->clientVersions[$clientId] = $packetData[4] ?? 0x01;
-                $phoneRaw = array_slice($packetData, 5, 10);
-                $devSerial = ($packetData[15] << 8) | $packetData[16];
-                $headerLen = 17;
             } else {
-                $phoneRaw = array_slice($packetData, 4, 6);
-                $devSerial = ($packetData[10] << 8) | $packetData[11];
-                $headerLen = 12;
+                $unescaped[] = $bytes[$i];
             }
+        }
 
-            $body = array_slice($packetData, $headerLen);
-            $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
-            $phoneStr = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
+        // Eliminar 0x7E inicial y final
+        if (count($unescaped) < 3) {
+            return;
+        }
+        
+        $packetData = array_slice($unescaped, 1, -2);
+        
+        if (count($packetData) < 12) {
+            $this->error("   -> [ERR] Paquete demasiado corto");
+            return;
+        }
 
-            $this->info(sprintf('[RECV] Msg=0x%04X Serial=%d Term=%s Ver=%s',
-                $msgId, $devSerial, $phoneStr, $this->clientProtocols[$clientId]));
+        // Parsear header
+        $msgId = ($packetData[0] << 8) | $packetData[1];
+        $attr = ($packetData[2] << 8) | $packetData[3];
+        $is2019 = ($attr >> 14) & 0x01;
+        $bodyLength = $attr & 0x03FF;
 
-            // Manejar sesiones duplicadas
-            if (isset($this->terminalSockets[$phoneKey]) && $this->terminalSockets[$phoneKey] !== $socket) {
-                $oldSocket = $this->terminalSockets[$phoneKey];
-                if (in_array($oldSocket, $this->clients, true)) {
-                    $this->warn("   -> [DUP] Cerrando sesión duplicada para: $phoneKey");
-                    $this->closeConnection($oldSocket);
-                }
+        $clientId = spl_object_id($socket);
+        $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
+
+        if ($is2019) {
+            $this->clientVersions[$clientId] = $packetData[4] ?? 0x01;
+            $phoneRaw = array_slice($packetData, 5, 10);
+            $devSerial = ($packetData[15] << 8) | $packetData[16];
+            $headerLen = 17;
+        } else {
+            $phoneRaw = array_slice($packetData, 4, 6);
+            $devSerial = ($packetData[10] << 8) | $packetData[11];
+            $headerLen = 12;
+        }
+
+        $body = array_slice($packetData, $headerLen);
+        $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
+        $phoneStr = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
+
+        $this->info(sprintf('[RECV] Msg=0x%04X Serial=%d Term=%s Ver=%s',
+            $msgId, $devSerial, $phoneStr, $this->clientProtocols[$clientId]));
+
+        // Manejar sesiones duplicadas
+        if (isset($this->terminalSockets[$phoneKey]) && $this->terminalSockets[$phoneKey] !== $socket) {
+            $oldSocket = $this->terminalSockets[$phoneKey];
+            if (in_array($oldSocket, $this->clients, true)) {
+                $this->warn("   -> [DUP] Cerrando sesión duplicada para: $phoneKey");
+                $this->closeConnection($oldSocket);
             }
-            $this->terminalSockets[$phoneKey] = $socket;
+        }
+        $this->terminalSockets[$phoneKey] = $socket;
 
-            // Manejar mensajes
-            if ($msgId === 0x0100) {
+        // Manejar mensajes con prioridades
+        switch ($msgId) {
+            case 0x0100:
                 $this->handleRegistration($socket, $phoneRaw, $devSerial, $body, $phoneKey);
-            } elseif ($msgId === 0x0102) {
+                break;
+                
+            case 0x0102:
                 $this->handleAuthentication($socket, $phoneRaw, $devSerial, $body, $phoneKey);
-            } elseif ($msgId === 0x0002) {
+                break;
+                
+            case 0x0002: // Heartbeat - MÁXIMA PRIORIDAD
                 $this->handleHeartbeat($socket, $phoneRaw, $devSerial);
-            } elseif ($msgId === 0x0900 || $msgId === 0x0704 || $msgId === 0x0200) {
-                // Solo procesar estos mensajes si el terminal está autenticado
-                $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
-                if (($this->connectionState[$phoneKey] ?? '') === 'authenticated') {
-                    $this->handleOtherMessage($socket, $phoneRaw, $devSerial, $msgId, $body, $phoneKey);
-                } else {
-                    $this->error("   -> [ERR] Terminal no autenticado intentando enviar 0x" . sprintf('%04X', $msgId));
-                }
-            } else {
-                $this->handleOtherMessage($socket, $phoneRaw, $devSerial, $msgId, $body, $phoneKey);
-            }
+                break;
+                
+            case 0x0704: // Batch location - ALTA PRIORIDAD
+                $this->handleBatchLocation($socket, $phoneRaw, $devSerial);
+                break;
+                
+            case 0x0900:
+                $this->handleTransparentData($socket, $phoneRaw, $devSerial, $body, $phoneKey);
+                break;
+                
+            case 0x0200:
+                $this->handleLocationReport($socket, $phoneKey, $phoneRaw, $devSerial, $body);
+                break;
+                
+            default:
+                $this->handleUnknownMessage($socket, $phoneRaw, $devSerial, $msgId, $phoneKey);
         }
     }
 
@@ -198,8 +264,7 @@ class StartMdvrServer extends Command
         $phoneStr = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
         
         // Parsear información del dispositivo del body (Table 3.3.1)
-        // Provincia, condado, fabricante, modelo, etc.
-        if (count($body) >= 76) { // El body debe tener al menos 76 bytes según Table 3.3.1
+        if (count($body) >= 76) {
             $provinceId = ($body[0] << 8) | $body[1];
             $countyId = ($body[2] << 8) | $body[3];
             
@@ -263,7 +328,7 @@ class StartMdvrServer extends Command
         $this->authCodes[$phoneKey] = $authCode;
         
         $this->info("   -> [SEND] 0x8100 -> Respondiendo con ID como Auth: $authCode");
-        $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
+        $this->sendPacketFast($socket, 0x8100, $phoneRaw, $body);
     }
 
     private function handleAuthentication($socket, $phoneRaw, $devSerial, $body, $phoneKey)
@@ -283,22 +348,6 @@ class StartMdvrServer extends Command
             
             $this->info("   -> [AUTH] Código recibido: $receivedAuth (longitud: $authLength)");
             
-            // Leer IMEI (15 bytes después del auth code)
-            $imeiOffset = 1 + $authLength;
-            $imei = '';
-            for ($i = $imeiOffset; $i < $imeiOffset + 15 && $i < count($body); $i++) {
-                $imei .= chr($body[$i]);
-            }
-            
-            // Leer versión de firmware (20 bytes después del IMEI)
-            $fwOffset = $imeiOffset + 15;
-            $firmwareVersion = '';
-            for ($i = $fwOffset; $i < $fwOffset + 20 && $i < count($body); $i++) {
-                $firmwareVersion .= chr($body[$i]);
-            }
-            
-            $this->info("   -> [AUTH] IMEI: $imei, FW: $firmwareVersion");
-            
             // Verificar código de autenticación
             $expectedAuth = $this->authCodes[$phoneKey] ?? '';
             
@@ -307,91 +356,103 @@ class StartMdvrServer extends Command
                 $this->connectionState[$phoneKey] = 'authenticated';
                 
                 // Responder con éxito (0x8001)
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102, 0x00);
+                $this->sendGeneralResponseFast($socket, $phoneRaw, $devSerial, 0x0102, 0x00);
                 
                 // Resetear contador de intentos
                 $this->registrationAttempts[$phoneKey] = 0;
                 
-                // IMPORTANTE: No enviar configuración automáticamente
-                // La cámara Ultravision parece funcionar sin configuración inicial
-                
             } else {
                 $this->error("   -> [AUTH] FALLIDA. Esperado: '$expectedAuth', Recibido: '$receivedAuth'");
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102, 0x01); // Failure
+                $this->sendGeneralResponseFast($socket, $phoneRaw, $devSerial, 0x0102, 0x01);
             }
         } else {
             $this->error("   -> [AUTH] Body vacío o inválido");
-            $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102, 0x01); // Failure
+            $this->sendGeneralResponseFast($socket, $phoneRaw, $devSerial, 0x0102, 0x01);
         }
     }
 
     private function handleHeartbeat($socket, $phoneRaw, $devSerial)
     {
-        $this->info("   -> [HEART] Heartbeat recibido");
-        $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0002, 0x00);
+        $this->info("   -> [HEART] Heartbeat recibido - respuesta inmediata");
+        
+        // Respuesta URGENTE para heartbeat - versión optimizada
+        $body = [
+            ($devSerial >> 8) & 0xFF,
+            $devSerial & 0xFF,
+            0x00, 0x02, // Reply ID = 0x0002
+            0x00,       // Result
+        ];
+        
+        $this->sendPacketFast($socket, 0x8001, $phoneRaw, $body);
     }
 
-    private function handleOtherMessage($socket, $phoneRaw, $devSerial, $msgId, $body, $phoneKey)
+    private function handleBatchLocation($socket, $phoneRaw, $devSerial)
     {
-        switch ($msgId) {
-            case 0x0900:
-                $this->info("   -> [TRANSP] Datos transparentes recibidos");
-                $this->processTransparentData($body);
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
-                break;
-                
-            case 0x0704:
-                $this->info("   -> [BATCH] Reporte de ubicación en lote");
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
-                break;
-                
-            case 0x0200:
-                $this->info("   -> [LOC] Reporte de ubicación individual");
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
-                
-                // Procesar ubicación
-                ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
-                break;
-                
-            default:
-                $this->info("   -> [UNKNOWN] Mensaje 0x" . sprintf('%04X', $msgId));
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
+        $this->info("   -> [BATCH] Reporte de ubicación en lote - respuesta rápida");
+        
+        // Respuesta rápida para batch
+        $body = [
+            ($devSerial >> 8) & 0xFF,
+            $devSerial & 0xFF,
+            0x07, 0x04, // Reply ID = 0x0704
+            0x00,       // Result
+        ];
+        
+        $this->sendPacketFast($socket, 0x8001, $phoneRaw, $body);
+    }
+
+    private function handleTransparentData($socket, $phoneRaw, $devSerial, $body, $phoneKey)
+    {
+        $this->info("   -> [TRANSP] Datos transparentes recibidos");
+        
+        // Solo responder si está autenticado
+        if (($this->connectionState[$phoneKey] ?? '') === 'authenticated') {
+            $this->sendGeneralResponseFast($socket, $phoneRaw, $devSerial, 0x0900, 0x00);
+        } else {
+            $this->error("   -> [ERR] Terminal no autenticado intentando enviar 0x0900");
         }
     }
 
-    private function processTransparentData($body)
+    private function handleLocationReport($socket, $phoneKey, $phoneRaw, $devSerial, $body)
     {
-        if (count($body) > 0) {
-            $transparentType = $body[0];
-            $this->info("   -> [TRANSP] Tipo: 0x" . sprintf('%02X', $transparentType));
+        $this->info("   -> [LOC] Reporte de ubicación individual");
+        
+        // Solo responder si está autenticado
+        if (($this->connectionState[$phoneKey] ?? '') === 'authenticated') {
+            $this->sendGeneralResponseFast($socket, $phoneRaw, $devSerial, 0x0200, 0x00);
             
-            // Aquí puedes procesar diferentes tipos de datos transparentes
-            // según la Table 3.10.2 del manual
+            // Procesar ubicación en background (no bloqueante)
+            ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
+        } else {
+            $this->error("   -> [ERR] Terminal no autenticado intentando enviar 0x0200");
         }
     }
 
-    private function sendGeneralResponse($socket, $phoneRaw, $devSerial, $replyId, $result)
+    private function handleUnknownMessage($socket, $phoneRaw, $devSerial, $msgId, $phoneKey)
     {
-        // Table 3.1.2 - Respuesta general (0x8001)
+        $this->info("   -> [UNKNOWN] Mensaje 0x" . sprintf('%04X', $msgId));
+        
+        // Solo responder si está autenticado para mensajes desconocidos
+        if (($this->connectionState[$phoneKey] ?? '') === 'authenticated') {
+            $this->sendGeneralResponseFast($socket, $phoneRaw, $devSerial, $msgId, 0x00);
+        }
+    }
+
+    private function sendGeneralResponseFast($socket, $phoneRaw, $devSerial, $replyId, $result)
+    {
+        // Versión optimizada para respuestas rápidas
         $body = [
             ($devSerial >> 8) & 0xFF,
             $devSerial & 0xFF,
             ($replyId >> 8) & 0xFF,
             $replyId & 0xFF,
-            $result, // 0=success, 1=failure, etc.
+            $result,
         ];
         
-        $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
+        $this->sendPacketFast($socket, 0x8001, $phoneRaw, $body);
     }
 
-    private function getNextSerial($phoneKey)
-    {
-        $current = $this->terminalSerials[$phoneKey] ?? 0;
-        $this->terminalSerials[$phoneKey] = ($current + 1) % 65535;
-        return $current;
-    }
-
-    private function sendPacket($socket, $msgId, $phoneRaw, $body)
+    private function sendPacketFast($socket, $msgId, $phoneRaw, $body)
     {
         $clientId = spl_object_id($socket);
         $protocol = $this->clientProtocols[$clientId] ?? '2019';
@@ -400,11 +461,11 @@ class StartMdvrServer extends Command
         $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
         $srvSerial = $this->getNextSerial($phoneKey);
         
-        // Construir header
+        // Construir header optimizado
         $attr = count($body);
         
         if ($protocol === '2019') {
-            $attr |= 0x4000; // Bit 14 = 1 (versión 2019)
+            $attr |= 0x4000;
             $header = [
                 ($msgId >> 8) & 0xFF,
                 $msgId & 0xFF,
@@ -421,52 +482,125 @@ class StartMdvrServer extends Command
             ];
         }
         
-        // Terminal phone number
+        // Teléfono
         foreach ($phoneRaw as $b) {
             $header[] = $b;
         }
         
-        // Message serial number
+        // Serial servidor
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
         
-        // Unir header + body
+        // Unir y calcular checksum en un solo paso
         $full = array_merge($header, $body);
-        
-        // Calcular checksum (XOR)
         $cs = 0;
+        $escaped = [0x7E];
+        
         foreach ($full as $b) {
             $cs ^= $b;
-        }
-        $full[] = $cs;
-        
-        // Escapar 0x7E y 0x7D
-        $final = [0x7E];
-        foreach ($full as $b) {
+            
             if ($b === 0x7E) {
-                $final[] = 0x7D;
-                $final[] = 0x02;
+                $escaped[] = 0x7D;
+                $escaped[] = 0x02;
             } elseif ($b === 0x7D) {
-                $final[] = 0x7D;
-                $final[] = 0x01;
+                $escaped[] = 0x7D;
+                $escaped[] = 0x01;
             } else {
-                $final[] = $b;
+                $escaped[] = $b;
             }
         }
-        $final[] = 0x7E;
         
-        // Enviar
-        $data = pack('C*', ...$final);
-        $result = @socket_write($socket, $data);
+        // Añadir checksum (escapado si es necesario)
+        if ($cs === 0x7E) {
+            $escaped[] = 0x7D;
+            $escaped[] = 0x02;
+        } elseif ($cs === 0x7D) {
+            $escaped[] = 0x7D;
+            $escaped[] = 0x01;
+        } else {
+            $escaped[] = $cs;
+        }
+        
+        $escaped[] = 0x7E;
+        
+        // Enviar inmediatamente
+        $data = pack('C*', ...$escaped);
+        $result = @socket_write($socket, $data, strlen($data));
         
         if ($result === false) {
-            $this->error("   -> [SEND ERR] Error al enviar paquete");
-            $this->closeConnection($socket);
+            $errorCode = socket_last_error($socket);
+            $errorMsg = socket_strerror($errorCode);
+            $this->error("   -> [SEND ERR] Error al enviar: $errorMsg");
+            
+            // No cerrar inmediatamente, solo registrar el error
             return;
         }
         
         $hex = strtoupper(bin2hex($data));
         $this->line("<fg=green>[RAW OUT]</> $hex");
+    }
+
+    private function getNextSerial($phoneKey)
+    {
+        $current = $this->terminalSerials[$phoneKey] ?? 0;
+        $this->terminalSerials[$phoneKey] = ($current + 1) % 65535;
+        return $current;
+    }
+
+    private function periodicCleanup()
+    {
+        $now = time();
+        
+        // Limpiar cada 30 segundos
+        if ($now - $this->lastCleanupTime < 30) {
+            return;
+        }
+        
+        $this->lastCleanupTime = $now;
+        $cleaned = 0;
+        
+        // Limpiar buffers grandes
+        foreach ($this->clientBuffers as $clientId => $buffer) {
+            if (strlen($buffer) > 10240) { // 10KB
+                $this->clientBuffers[$clientId] = '';
+                $cleaned++;
+            }
+        }
+        
+        // Limpiar estadísticas de timing (mantener solo las últimas 100)
+        if (count($this->packetTiming) > 100) {
+            $this->packetTiming = array_slice($this->packetTiming, -100);
+        }
+        
+        // Mostrar estadísticas de rendimiento
+        if (count($this->packetTiming) > 0) {
+            $avgTime = array_sum($this->packetTiming) / count($this->packetTiming);
+            $maxTime = max($this->packetTiming);
+            $this->info("   -> [PERF] Tiempo promedio: " . round($avgTime * 1000, 2) . "ms, Máximo: " . round($maxTime * 1000, 2) . "ms");
+        }
+        
+        if ($cleaned > 0) {
+            $this->warn("   -> [CLEAN] Limpiados $cleaned buffers grandes");
+        }
+    }
+
+    private function logBufferSizes()
+    {
+        $totalSize = 0;
+        $maxSize = 0;
+        $count = 0;
+        
+        foreach ($this->clientBuffers as $buffer) {
+            $size = strlen($buffer);
+            $totalSize += $size;
+            $maxSize = max($maxSize, $size);
+            $count++;
+        }
+        
+        if ($count > 0) {
+            $avgSize = $totalSize / $count;
+            $this->info("   -> [BUFFER] Total: " . round($totalSize/1024, 2) . "KB, Avg: " . round($avgSize, 2) . " bytes, Max: $maxSize bytes, Clientes: $count");
+        }
     }
 
     private function closeConnection($s)
