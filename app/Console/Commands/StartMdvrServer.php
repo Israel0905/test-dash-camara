@@ -166,10 +166,9 @@ class StartMdvrServer extends Command
 
             // --- MANEJO DE MENSAJES ---
             switch ($msgId) {
-                case 0x0100: // Registro (Table 3.3.1)
+                case 0x0100: // Registro
                     $this->info('   -> [REG] Registro recibido');
                     
-                    // Manejar múltiples registros sin resetear
                     $phoneHex = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
                     $alreadyRegistered = isset($this->terminalSerials[$phoneHex]);
                     
@@ -180,8 +179,12 @@ class StartMdvrServer extends Command
                         }
                     }
                     
-                    // Respuesta SIMPLE como en el ejemplo exitoso
-                    $this->respondRegistrationSimple($socket, $phoneRaw, $devSerial, $body);
+                    // PRUEBA ESTAS DOS VERSIONES:
+                    // 1. Versión SIMPLE (recomendada primero)
+                    // $this->respondRegistrationSimple($socket, $phoneRaw, $devSerial, $body);
+                    
+                    // 2. Versión COMPLETA con auth code
+                    $this->respondRegistrationWithAuth($socket, $phoneRaw, $devSerial, $body);
                     break;
                     
                 case 0x0001: // Confirmación (Table 3.1.1)
