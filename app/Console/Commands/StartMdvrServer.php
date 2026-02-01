@@ -32,6 +32,9 @@ class StartMdvrServer extends Command
     // Estado de conexión por terminal
     protected $connectionState = [];
 
+    // Contador de intentos de registro por terminal
+    protected $registrationAttempts = [];
+
     public function handle()
     {
         $port = $this->option('port');
@@ -87,21 +90,17 @@ class StartMdvrServer extends Command
         while (true) {
             $start = strpos($buffer, chr(0x7E));
             if ($start === false) {
-                // No hay inicio de paquete, limpiar buffer
                 $buffer = '';
                 break;
             }
 
             $end = strpos($buffer, chr(0x7E), $start + 1);
             if ($end === false) {
-                // No hay fin de paquete, mantener en buffer
                 break;
             }
 
             $packetLength = $end - $start + 1;
             $singlePacket = substr($buffer, $start, $packetLength);
-            
-            // Eliminar el paquete procesado del buffer
             $buffer = substr($buffer, $end + 1);
 
             if (strlen($singlePacket) < 12) {
@@ -110,7 +109,7 @@ class StartMdvrServer extends Command
 
             $this->line("\n<fg=yellow>[RAW IN ]</> " . strtoupper(bin2hex($singlePacket)));
 
-            // --- UNESCAPE (Sección 2.1 del manual) ---
+            // --- UNESCAPE ---
             $bytes = array_values(unpack('C*', $singlePacket));
             $unescaped = [];
             
@@ -134,11 +133,10 @@ class StartMdvrServer extends Command
             $packetData = array_slice($unescaped, 1, -2);
             
             if (count($packetData) < 12) {
-                $this->error("   -> [ERR] Paquete demasiado corto");
                 continue;
             }
 
-            // Parsear header (Table 2.2.2)
+            // Parsear header
             $msgId = ($packetData[0] << 8) | $packetData[1];
             $attr = ($packetData[2] << 8) | $packetData[3];
             $is2019 = ($attr >> 14) & 0x01;
@@ -146,7 +144,6 @@ class StartMdvrServer extends Command
 
             $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
 
-            // Parsear según versión
             if ($is2019) {
                 $this->clientVersions[$clientId] = $packetData[4] ?? 0x01;
                 $phoneRaw = array_slice($packetData, 5, 10);
@@ -177,45 +174,58 @@ class StartMdvrServer extends Command
 
             // Manejar mensajes
             if ($msgId === 0x0100) {
-                $this->handleRegistration($socket, $phoneRaw, $devSerial, $body);
+                $this->handleRegistration($socket, $phoneRaw, $devSerial, $body, $phoneKey);
             } elseif ($msgId === 0x0102) {
-                $this->handleAuthentication($socket, $phoneRaw, $devSerial, $body);
-            } elseif ($msgId === 0x0900) {
-                $this->handleTransparentData($socket, $phoneRaw, $devSerial, $body);
-            } elseif ($msgId === 0x0704) {
-                $this->handleBatchLocation($socket, $phoneRaw, $devSerial, $body);
-            } elseif ($msgId === 0x0200) {
-                $this->handleLocationReport($socket, $phoneKey, $phoneRaw, $devSerial, $body);
+                $this->handleAuthentication($socket, $phoneRaw, $devSerial, $body, $phoneKey);
             } elseif ($msgId === 0x0002) {
                 $this->handleHeartbeat($socket, $phoneRaw, $devSerial);
             } else {
-                $this->handleUnknownMessage($socket, $phoneRaw, $devSerial, $msgId);
+                $this->handleOtherMessage($socket, $phoneRaw, $devSerial, $msgId);
             }
         }
     }
 
-    private function handleRegistration($socket, $phoneRaw, $devSerial, $body)
+    private function handleRegistration($socket, $phoneRaw, $devSerial, $body, $phoneKey)
     {
-        $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
         $phoneStr = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
         
-        $this->info("   -> [REG] Procesando registro para terminal: $phoneStr");
-        
-        // Si es serial 0, resetear estado
-        if ($devSerial === 0) {
-            $this->terminalSerials[$phoneKey] = 0;
-            $this->connectionState[$phoneKey] = 'registering';
-            $this->info("   -> [REG] Iniciando registro nuevo");
+        // Limitar intentos de registro (evitar bucle infinito)
+        if (!isset($this->registrationAttempts[$phoneKey])) {
+            $this->registrationAttempts[$phoneKey] = 0;
         }
         
-        // Responder con 0x8100 según Table 3.3.2
-        $this->sendRegistrationResponse($socket, $phoneRaw, $devSerial, $phoneStr);
+        $this->registrationAttempts[$phoneKey]++;
+        
+        if ($this->registrationAttempts[$phoneKey] > 3) {
+            $this->error("   -> [REG ERR] Demasiados intentos de registro para $phoneStr. Cerrando conexión.");
+            $this->closeConnection($socket);
+            return;
+        }
+        
+        $this->info("   -> [REG] Intentando registro ($this->registrationAttempts[$phoneKey]/3) para: $phoneStr");
+        
+        // Parsear datos de registro del body (Table 3.3.1)
+        // Province ID (2 bytes), County ID (2 bytes), Manufacturer ID (11 bytes), etc.
+        // Pero para la respuesta solo necesitamos el serial del mensaje
+        
+        // Enviar respuesta 0x8100 según el formato EXACTO del manual
+        $this->sendUltravisionRegistrationResponse($socket, $phoneRaw, $devSerial, $phoneStr);
     }
 
-    private function sendRegistrationResponse($socket, $phoneRaw, $devSerial, $phoneStr)
+    private function sendUltravisionRegistrationResponse($socket, $phoneRaw, $devSerial, $phoneStr)
     {
-        // Según Table 3.3.2 y el ejemplo en 8100消息解析 decode.txt
-        // Body: [reply_serial_high, reply_serial_low, result, auth_code...]
+        // FORMATO SEGÚN EL MANUAL ULTRAVISION Y EL ARCHIVO decode.txt:
+        // 1. Reply serial number (2 bytes) - Serial del mensaje 0x0100 recibido
+        // 2. Result (1 byte) - 0=success
+        // 3. Authentication code (STRING) - Según decode.txt: "8390123456789" + null
+        
+        // En tu caso, el terminal ID es "992001" (6 bytes)
+        // Pero según el ejemplo del manual, el auth code debe tener al menos 13 bytes + null
+        
+        // Crear código de autenticación: "AUTH" + terminal ID + timestamp
+        $authCode = "AUTH" . $phoneStr . time();
+        // Limitar a 13 bytes (como en el ejemplo)
+        $authCode = substr($authCode, 0, 13);
         
         $body = [
             ($devSerial >> 8) & 0xFF,  // Reply serial high
@@ -223,130 +233,116 @@ class StartMdvrServer extends Command
             0x00,                      // Result: 0=success
         ];
         
-        // Código de autenticación: usar el ID del terminal (6 bytes)
-        // En el ejemplo del manual es "AUTH0000001115" (13 chars + null)
-        // En tu caso, según el log, usas "992001" (6 bytes)
-        $authCode = $phoneStr; // "992001"
-        
-        // Agregar auth code (hasta 8 bytes, rellenar con null si es necesario)
-        for ($i = 0; $i < 8; $i++) {
+        // Agregar auth code como string (13 bytes + null terminator = 14 bytes)
+        for ($i = 0; $i < 13; $i++) {
             $body[] = isset($authCode[$i]) ? ord($authCode[$i]) : 0x00;
         }
+        $body[] = 0x00; // Null terminator
         
-        $this->info("   -> [SEND] 0x8100 -> Respondiendo con ID como Auth: $authCode");
+        // Guardar auth code para verificación posterior
+        $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
+        $this->authCodes[$phoneKey] = $authCode;
+        
+        $this->info("   -> [SEND] 0x8100 -> Auth code: $authCode");
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
 
-    private function handleAuthentication($socket, $phoneRaw, $devSerial, $body)
+    private function handleAuthentication($socket, $phoneRaw, $devSerial, $body, $phoneKey)
     {
-        $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
+        $phoneStr = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
         
-        $this->info("   -> [AUTH] Autenticación recibida");
+        $this->info("   -> [AUTH] Autenticación recibida de: $phoneStr");
         
         // Parsear auth code del body (Table 3.4)
         if (count($body) >= 1) {
             $authLength = $body[0];
             $receivedAuth = '';
+            
             for ($i = 1; $i <= $authLength && $i < count($body); $i++) {
                 $receivedAuth .= chr($body[$i]);
             }
+            
             $this->info("   -> [AUTH] Código recibido: $receivedAuth");
             
-            // Verificar auth code (debe ser "992001")
-            $expectedAuth = implode('', array_map('chr', array_slice($phoneRaw, 0, 6)));
-            if ($receivedAuth === $expectedAuth) {
-                $this->info("   -> [AUTH] Autenticación exitosa");
+            // Verificar contra el código guardado
+            $expectedAuth = $this->authCodes[$phoneKey] ?? '';
+            
+            if ($expectedAuth && $receivedAuth === $expectedAuth) {
+                $this->info("   -> [AUTH] Autenticación EXITOSA");
                 $this->connectionState[$phoneKey] = 'authenticated';
                 
-                // Responder con 0x8001 (Table 3.1.2)
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102);
+                // Responder con éxito
+                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102, 0x00);
                 
-                // Opcional: enviar configuración inicial
-                $this->sendInitialConfiguration($socket, $phoneRaw);
+                // Resetear contador de intentos
+                $this->registrationAttempts[$phoneKey] = 0;
+                
+                // Opcional: enviar configuración después de autenticar
+                // $this->sendInitialConfiguration($socket, $phoneRaw);
+                
             } else {
-                $this->error("   -> [AUTH] Error: código inválido");
-                $this->connectionState[$phoneKey] = 'auth_failed';
-                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102, 0x01); // Result: failure
+                $this->error("   -> [AUTH] FALLIDA. Esperado: $expectedAuth, Recibido: $receivedAuth");
+                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102, 0x01); // Failure
             }
+        } else {
+            $this->error("   -> [AUTH] Body vacío o inválido");
+            $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0102, 0x01); // Failure
         }
-    }
-
-    private function handleTransparentData($socket, $phoneRaw, $devSerial, $body)
-    {
-        $this->info("   -> [TRANSP] Datos transparentes recibidos");
-        
-        // Responder con 0x8001
-        $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0900);
-        
-        // Parsear tipo de datos transparentes (primer byte)
-        if (count($body) > 0) {
-            $transparentType = $body[0];
-            $this->info("   -> [TRANSP] Tipo: 0x" . sprintf('%02X', $transparentType));
-        }
-    }
-
-    private function handleBatchLocation($socket, $phoneRaw, $devSerial, $body)
-    {
-        $this->info("   -> [BATCH] Reporte de ubicación en lote");
-        
-        // Responder con 0x8001
-        $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0704);
-        
-        // Parsear datos batch (Table 3.6.1)
-        if (count($body) >= 3) {
-            $dataItemCount = ($body[0] << 8) | $body[1];
-            $dataType = $body[2];
-            $this->info("   -> [BATCH] Items: $dataItemCount, Tipo: $dataType");
-        }
-    }
-
-    private function handleLocationReport($socket, $phoneKey, $phoneRaw, $devSerial, $body)
-    {
-        $this->info("   -> [LOC] Reporte de ubicación individual");
-        
-        // Responder con 0x8001
-        $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0200);
-        
-        // Procesar ubicación en background job
-        ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
     }
 
     private function handleHeartbeat($socket, $phoneRaw, $devSerial)
     {
         $this->info("   -> [HEART] Heartbeat recibido");
-        
-        // Responder con 0x8001
-        $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0002);
+        $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, 0x0002, 0x00);
     }
 
-    private function handleUnknownMessage($socket, $phoneRaw, $devSerial, $msgId)
+    private function handleOtherMessage($socket, $phoneRaw, $devSerial, $msgId)
     {
-        $this->info("   -> [UNKNOWN] Mensaje no manejado: 0x" . sprintf('%04X', $msgId));
+        $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
         
-        // Responder con 0x8001 genérico
-        $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId);
+        // Verificar si el terminal está autenticado
+        $state = $this->connectionState[$phoneKey] ?? 'unknown';
+        
+        if ($state !== 'authenticated' && $msgId !== 0x0100 && $msgId !== 0x0102) {
+            $this->error("   -> [ERR] Terminal no autenticado intentando enviar 0x" . sprintf('%04X', $msgId));
+            return;
+        }
+        
+        switch ($msgId) {
+            case 0x0900:
+                $this->info("   -> [TRANSP] Datos transparentes");
+                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
+                break;
+                
+            case 0x0704:
+                $this->info("   -> [BATCH] Reporte de ubicación en lote");
+                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
+                break;
+                
+            case 0x0200:
+                $this->info("   -> [LOC] Reporte de ubicación individual");
+                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
+                // ProcessMdvrLocation::dispatch($phoneKey, ...);
+                break;
+                
+            default:
+                $this->info("   -> [UNKNOWN] Mensaje 0x" . sprintf('%04X', $msgId));
+                $this->sendGeneralResponse($socket, $phoneRaw, $devSerial, $msgId, 0x00);
+        }
     }
 
-    private function sendGeneralResponse($socket, $phoneRaw, $devSerial, $replyId, $result = 0x00)
+    private function sendGeneralResponse($socket, $phoneRaw, $devSerial, $replyId, $result)
     {
         // Table 3.1.2 - Respuesta general (0x8001)
         $body = [
-            ($devSerial >> 8) & 0xFF,  // Reply serial high
-            $devSerial & 0xFF,         // Reply serial low
-            ($replyId >> 8) & 0xFF,    // Reply ID high
-            $replyId & 0xFF,           // Reply ID low
-            $result,                   // Result: 0=success, 1=failure, etc.
+            ($devSerial >> 8) & 0xFF,
+            $devSerial & 0xFF,
+            ($replyId >> 8) & 0xFF,
+            $replyId & 0xFF,
+            $result, // 0=success, 1=failure, etc.
         ];
         
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
-    }
-
-    private function sendInitialConfiguration($socket, $phoneRaw)
-    {
-        // Opcional: enviar configuración inicial según Table 3.17.1
-        // En este caso, NO enviaremos configuración automáticamente
-        // ya que la cámara Ultravision parece funcionar sin ella
-        $this->info("   -> [CFG] Configuración inicial opcional (no enviada)");
     }
 
     private function getNextSerial($phoneKey)
@@ -365,11 +361,11 @@ class StartMdvrServer extends Command
         $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
         $srvSerial = $this->getNextSerial($phoneKey);
         
-        // Construir header según Table 2.2.2
+        // Construir header
         $attr = count($body);
         
         if ($protocol === '2019') {
-            $attr |= 0x4000;  // Bit 14 = 1 (versión 2019)
+            $attr |= 0x4000; // Bit 14 = 1 (versión 2019)
             $header = [
                 ($msgId >> 8) & 0xFF,
                 $msgId & 0xFF,
@@ -420,9 +416,19 @@ class StartMdvrServer extends Command
         }
         $final[] = 0x7E;
         
-        // Enviar
-        @socket_write($socket, pack('C*', ...$final));
-        $hex = strtoupper(bin2hex(pack('C*', ...$final)));
+        // Enviar con verificación de error
+        $data = pack('C*', ...$final);
+        $result = @socket_write($socket, $data);
+        
+        if ($result === false) {
+            $errorCode = socket_last_error($socket);
+            $errorMsg = socket_strerror($errorCode);
+            $this->error("   -> [SEND ERR] Error al enviar: $errorMsg");
+            $this->closeConnection($socket);
+            return;
+        }
+        
+        $hex = strtoupper(bin2hex($data));
         $this->line("<fg=green>[RAW OUT]</> $hex");
     }
 
@@ -440,15 +446,17 @@ class StartMdvrServer extends Command
             // Ignorar error si ya está cerrado
         }
 
-        // Limpiar de terminalSockets
+        // Limpiar todas las referencias a este socket
         foreach ($this->terminalSockets as $terminalId => $socket) {
             if ($socket === $s) {
                 unset($this->terminalSockets[$terminalId]);
+                unset($this->connectionState[$terminalId]);
+                unset($this->registrationAttempts[$terminalId]);
+                unset($this->authCodes[$terminalId]);
                 break;
             }
         }
 
-        // Limpiar de clients
         $key = array_search($s, $this->clients, true);
         if ($key !== false) {
             unset($this->clients[$key]);
