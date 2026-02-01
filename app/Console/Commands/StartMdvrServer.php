@@ -12,7 +12,7 @@ class StartMdvrServer extends Command
 
     // Persistencia en memoria
     protected $terminalSerials = [];
-    protected $deviceStates = []; 
+    protected $deviceStates = []; // Registro de estados (REGISTERED, AUTHENTICATED)
     protected $clientBuffers = [];
     protected $clientProtocols = [];
     protected $clientVersions = [];
@@ -81,6 +81,8 @@ class StartMdvrServer extends Command
 
             $packetLength = $end - $start + 1;
             $singlePacket = substr($buffer, $start, $packetLength);
+            
+            // FIX: Avanzamos el buffer después del delimitador final
             $buffer = substr($buffer, $end + 1);
 
             if (strlen($singlePacket) < 12) continue;
@@ -117,7 +119,9 @@ class StartMdvrServer extends Command
             $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
             $body = array_slice($payload, $headerLen);
 
+            // --- GESTIÓN DE SOCKETS ---
             if (isset($this->terminalSockets[$phoneKey]) && $this->terminalSockets[$phoneKey] !== $socket) {
+                $this->warn("   -> [CLEANUP] Cerrando socket viejo para terminal: $phoneKey");
                 $this->closeConnection($this->terminalSockets[$phoneKey]);
             }
             $this->terminalSockets[$phoneKey] = $socket;
@@ -132,7 +136,7 @@ class StartMdvrServer extends Command
                         $this->info("   -> [SKIP] Ya autenticado, reenviando respuesta de registro.");
                     } else {
                         $this->deviceStates[$phoneKey] = 'REGISTERED';
-                        $this->terminalSerials[$phoneKey] = 0; 
+                        $this->terminalSerials[$phoneKey] = 0; // Reset serial para nueva sesión
                         $this->info('   -> [STATE] REGISTRADO.');
                     }
                     $this->respondRegistration($socket, $phoneRaw, $devSerial);
@@ -142,16 +146,6 @@ class StartMdvrServer extends Command
                     $this->deviceStates[$phoneKey] = 'AUTHENTICATED';
                     $this->info('   -> [STATE] AUTENTICADO. Link OK.');
                     $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    break;
-
-                case 0x0200: // Ubicación tiempo real
-                case 0x0704: // Ubicación en lote (históricos)
-                    // MODIFICACIÓN: Responder inmediatamente (Quick ACK)
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    $this->info("   -> [QUICK ACK] Ubicación recibida y confirmada.");
-                    
-                    // Procesar después de haber respondido
-                    ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
                     break;
 
                 case 0x0001: // ACK de la cámara
@@ -164,8 +158,10 @@ class StartMdvrServer extends Command
                     break;
 
                 default:
-                    // Enviar respuesta general para cualquier otro comando desconocido
                     $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                    if ($msgId === 0x0200 || $msgId === 0x0704) {
+                        ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
+                    }
                     break;
             }
         }
@@ -181,6 +177,7 @@ class StartMdvrServer extends Command
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
         $authCode = "123456";
+        // Cuerpo: Serial Cámara (2) + Resultado 00 (1) + Código (n)
         $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x00];
         foreach (str_split($authCode) as $char) { $body[] = ord($char); }
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
@@ -188,6 +185,7 @@ class StartMdvrServer extends Command
 
     private function respondGeneral($socket, $phoneRaw, $devSerial, $replyId)
     {
+        // Cuerpo: Serial Cámara (2) + ID Mensaje (2) + Resultado 00 (1)
         $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, ($replyId >> 8) & 0xFF, $replyId & 0xFF, 0x00];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
