@@ -8,15 +8,22 @@ use Illuminate\Console\Command;
 class StartMdvrServer extends Command
 {
     protected $signature = 'mdvr:start {--port=8809}';
+
     protected $description = 'Servidor JT/T 808 compatible con Ultravision N6 (2011/2019)';
 
-    // Persistencia en memoria
+    // Seriales persistentes por ID de Terminal (Teléfono)
     protected $terminalSerials = [];
-    protected $deviceStates = []; // Registro de estados (REGISTERED, AUTHENTICATED)
+
+    // Buffers y Protocolos por Socket ID
     protected $clientBuffers = [];
+
     protected $clientProtocols = [];
-    protected $clientVersions = [];
+
     protected $clients = [];
+
+    protected $clientVersions = []; // Added: Track protocol version byte
+
+    // Rastreo de sockets activos por Terminal para evitar duplicados (Socket Flapping)
     protected $terminalSockets = [];
 
     public function handle()
@@ -26,8 +33,9 @@ class StartMdvrServer extends Command
         $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
 
-        if (!@socket_bind($socket, $address, $port)) {
+        if (! @socket_bind($socket, $address, $port)) {
             $this->error("Error: Puerto $port ocupado.");
+
             return;
         }
 
@@ -48,6 +56,7 @@ class StartMdvrServer extends Command
                             $this->clients[] = $newClient;
                             $clientId = spl_object_id($newClient);
                             $this->clientBuffers[$clientId] = '';
+                            $this->clientProtocols[$clientId] = '2019';
                             $this->warn("[CONN] Cámara conectada (ID $clientId).");
                         }
                     } else {
@@ -77,26 +86,35 @@ class StartMdvrServer extends Command
             }
 
             $end = strpos($buffer, chr(0x7E), $start + 1);
-            if ($end === false) break;
+            if ($end === false) {
+                break;
+            }
 
             $packetLength = $end - $start + 1;
             $singlePacket = substr($buffer, $start, $packetLength);
-            
-            // FIX: Avanzamos el buffer después del delimitador final
-            $buffer = substr($buffer, $end + 1);
+            $buffer = substr($buffer, $end);
 
-            if (strlen($singlePacket) < 12) continue;
+            if (strlen($singlePacket) < 12) {
+                continue;
+            }
 
-            $this->line("\n<fg=yellow>[RAW RECV]</>: " . strtoupper(bin2hex($singlePacket)));
+            $this->line("\n<fg=yellow>[RAW RECV]</>: ".strtoupper(bin2hex($singlePacket)));
 
-            // --- UNESCAPE ---
+            // --- UNESCAPE (Sección 2.1 del manual) ---
             $bytes = array_values(unpack('C*', $singlePacket));
             $data = [];
             for ($i = 0; $i < count($bytes); $i++) {
                 if ($bytes[$i] === 0x7D && isset($bytes[$i + 1])) {
-                    if ($bytes[$i + 1] === 0x01) { $data[] = 0x7D; $i++; }
-                    elseif ($bytes[$i + 1] === 0x02) { $data[] = 0x7E; $i++; }
-                } else { $data[] = $bytes[$i]; }
+                    if ($bytes[$i + 1] === 0x01) {
+                        $data[] = 0x7D;
+                        $i++;
+                    } elseif ($bytes[$i + 1] === 0x02) {
+                        $data[] = 0x7E;
+                        $i++;
+                    }
+                } else {
+                    $data[] = $bytes[$i];
+                }
             }
 
             $payload = array_slice($data, 1, -2);
@@ -104,8 +122,14 @@ class StartMdvrServer extends Command
             $attr = ($payload[2] << 8) | $payload[3];
             $is2019 = ($attr >> 14) & 0x01;
 
+            $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
+
+            // --- PARSING DEL ENCABEZADO (Tabla 2.2.2-1) ---
             if ($is2019) {
+                // Capturamos el byte de versión (índice 4 del payload) para responder igual
+                // Si la cámara manda 0x00, respondemos con 0x00. Si manda 0x01, con 0x01.
                 $this->clientVersions[$clientId] = $payload[4] ?? 0x01;
+
                 $phoneRaw = array_slice($payload, 5, 10);
                 $devSerial = ($payload[15] << 8) | $payload[16];
                 $headerLen = 17;
@@ -114,55 +138,52 @@ class StartMdvrServer extends Command
                 $devSerial = ($payload[10] << 8) | $payload[11];
                 $headerLen = 12;
             }
-
-            $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
-            $this->clientProtocols[$clientId] = $is2019 ? '2019' : '2011';
             $body = array_slice($payload, $headerLen);
+            $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
 
-            // --- GESTIÓN DE SOCKETS ---
+            // --- EVITAR SESIONES DUPLICADAS (Fix Flapping) ---
+            // --- CLEANUP DUPLICATE SESSIONS (FIX SOCKET FLAPPING) ---
             if (isset($this->terminalSockets[$phoneKey]) && $this->terminalSockets[$phoneKey] !== $socket) {
-                $this->warn("   -> [CLEANUP] Cerrando socket viejo para terminal: $phoneKey");
-                $this->closeConnection($this->terminalSockets[$phoneKey]);
+                $oldSocket = $this->terminalSockets[$phoneKey];
+
+                // Solo intentamos cerrar si el socket sigue siendo una referencia válida
+                // Y si todavía está en nuestra lista de clientes activos (para evitar race condition)
+                if (in_array($oldSocket, $this->clients, true)) {
+                    $this->warn("   -> [CLEANUP] Cerrando sesión previa para Terminal: $phoneKey");
+                    $this->closeConnection($oldSocket);
+                }
             }
             $this->terminalSockets[$phoneKey] = $socket;
 
-            $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d | Terminal: %s', 
+            $this->info(sprintf('[INFO V%s] ID: 0x%04X | Serial: %d | Terminal: %s',
                 $this->clientProtocols[$clientId], $msgId, $devSerial, $phoneKey));
 
-            // --- LÓGICA DE RESPUESTA ---
-            switch ($msgId) {
-                case 0x0100: // Registro
-                    if (($this->deviceStates[$phoneKey] ?? '') === 'AUTHENTICATED') {
-                        $this->info("   -> [SKIP] Ya autenticado, reenviando respuesta de registro.");
-                    } else {
-                        $this->deviceStates[$phoneKey] = 'REGISTERED';
-                        $this->terminalSerials[$phoneKey] = 0; // Reset serial para nueva sesión
-                        $this->info('   -> [STATE] REGISTRADO.');
-                    }
-                    $this->respondRegistration($socket, $phoneRaw, $devSerial);
-                    break;
+            // --- RESPUESTAS (Handshake Lógico del Manual) ---
+            if ($msgId === 0x0100) {
+                // FIX: Si la cámara físicamente manda Serial 0, nosotros también debemos resetear nuestro contador.
+                // Esto asegura que respondamos con Serial de Servidor 0 y la cámara acepte el paquete.
+                if ($devSerial === 0) {
+                    $this->terminalSerials[$phoneKey] = 0;
+                    $this->info('   -> [RESET] Forzando inicio de secuencia a 0.');
+                }
 
-                case 0x0102: // Autenticación
-                    $this->deviceStates[$phoneKey] = 'AUTHENTICATED';
-                    $this->info('   -> [STATE] AUTENTICADO. Link OK.');
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    break;
+                $this->respondRegistration($socket, $phoneRaw, $devSerial);
+            } elseif ($msgId === 0x0001) {
+                // IMPORTANTE: Solo logueamos, NO respondemos con 0x8001.
+                // Esto rompe el bucle de desconexión "Ack al Ack".
+                $this->info('   -> [OK] La cámara confirmó nuestro mensaje.');
 
-                case 0x0001: // ACK de la cámara
-                    $this->info('   -> [OK] Ack recibido.');
-                    break;
-
-                case 0x0002: // Heartbeat
-                    $this->info('   -> [KEEP-ALIVE] Heartbeat.');
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    break;
-
-                default:
-                    $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
-                    if ($msgId === 0x0200 || $msgId === 0x0704) {
-                        ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
-                    }
-                    break;
+                continue;
+            } elseif ($msgId === 0x0102) {
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                // Handshake obligatorio para evitar timeout (Sección 3.17)
+                $this->info('   -> Enviando Configuración Inicial (0x8103)...');
+                $this->sendPacket($socket, 0x8103, $phoneRaw, [0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x1E]);
+            } else {
+                $this->respondGeneral($socket, $phoneRaw, $devSerial, $msgId);
+                if ($msgId === 0x0200) {
+                    ProcessMdvrLocation::dispatch($phoneKey, bin2hex(pack('C*', ...$body)));
+                }
             }
         }
     }
@@ -171,80 +192,104 @@ class StartMdvrServer extends Command
     {
         $current = $this->terminalSerials[$phoneKey] ?? 0;
         $this->terminalSerials[$phoneKey] = ($current + 1) % 65535;
+
         return $current;
     }
 
     private function respondRegistration($socket, $phoneRaw, $devSerial)
     {
-        $authCode = "123456";
-        // Cuerpo: Serial Cámara (2) + Resultado 00 (1) + Código (n)
+        $authCode = "123456\0"; // Formato del archivo 8100消息解析 decode.txt
         $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, 0x00];
-        foreach (str_split($authCode) as $char) { $body[] = ord($char); }
+        foreach (str_split($authCode) as $char) {
+            $body[] = ord($char);
+        }
         $this->sendPacket($socket, 0x8100, $phoneRaw, $body);
     }
 
     private function respondGeneral($socket, $phoneRaw, $devSerial, $replyId)
     {
-        // Cuerpo: Serial Cámara (2) + ID Mensaje (2) + Resultado 00 (1)
         $body = [($devSerial >> 8) & 0xFF, $devSerial & 0xFF, ($replyId >> 8) & 0xFF, $replyId & 0xFF, 0x00];
         $this->sendPacket($socket, 0x8001, $phoneRaw, $body);
     }
 
     private function sendPacket($socket, $msgId, $phoneRaw, $body)
     {
-        $clientId = spl_object_id($socket);
-        $protocol = $this->clientProtocols[$clientId] ?? '2019';
-        $phoneKey = implode('', array_map(fn($b) => sprintf('%02X', $b), $phoneRaw));
+        $protocol = $this->clientProtocols[spl_object_id($socket)] ?? '2019';
+        $attr = count($body);
+        $phoneKey = implode('', array_map(fn ($b) => sprintf('%02X', $b), $phoneRaw));
         $srvSerial = $this->getNextSerial($phoneKey);
 
-        $attr = count($body);
         if ($protocol === '2019') {
             $attr |= 0x4000;
-            $ver = $this->clientVersions[$clientId] ?? 0x01;
+            $ver = $this->clientVersions[spl_object_id($socket)] ?? 0x01; // Default 0x01 si no se detectó
             $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF, $ver];
         } else {
             $header = [($msgId >> 8) & 0xFF, $msgId & 0xFF, ($attr >> 8) & 0xFF, $attr & 0xFF];
         }
 
-        foreach ($phoneRaw as $b) { $header[] = $b; }
+        foreach ($phoneRaw as $b) {
+            $header[] = $b;
+        }
         $header[] = ($srvSerial >> 8) & 0xFF;
         $header[] = $srvSerial & 0xFF;
 
         $full = array_merge($header, $body);
         $cs = 0;
-        foreach ($full as $b) { $cs ^= $b; }
+        foreach ($full as $b) {
+            $cs ^= $b;
+        }
         $full[] = $cs;
 
         $final = [0x7E];
         foreach ($full as $b) {
-            if ($b === 0x7E) { $final[] = 0x7D; $final[] = 0x02; }
-            elseif ($b === 0x7D) { $final[] = 0x7D; $final[] = 0x01; }
-            else { $final[] = $b; }
+            if ($b === 0x7E) {
+                $final[] = 0x7D;
+                $final[] = 0x02;
+            } elseif ($b === 0x7D) {
+                $final[] = 0x7D;
+                $final[] = 0x01;
+            } else {
+                $final[] = $b;
+            }
         }
         $final[] = 0x7E;
 
         @socket_write($socket, pack('C*', ...$final));
-        $this->line('<fg=green>[SEND HEX]</>: ' . strtoupper(bin2hex(pack('C*', ...$final))));
+        $this->line('<fg=green>[SEND HEX]</>: '.strtoupper(bin2hex(pack('C*', ...$final))));
     }
 
     private function closeConnection($s)
     {
-        if (!$s || (!is_resource($s) && !($s instanceof \Socket))) return;
+        // 1. Verificación básica de existencia
+        if (! $s || (! is_resource($s) && ! ($s instanceof \Socket))) {
+            return; // Ya está cerrado o no es válido, ignoramos.
+        }
+
         $id = spl_object_id($s);
-        
+
+        // 2. Intentamos cerrar capturando posibles errores de PHP 8+
+        try {
+            @socket_close($s);
+        } catch (\Throwable $e) {
+            // El socket ya estaba cerrado, ignoramos el error silenciosamente
+        }
+
+        // 3. Limpiamos la terminal de la lista de sockets activos
         foreach ($this->terminalSockets as $terminalId => $socket) {
             if ($socket === $s) {
                 unset($this->terminalSockets[$terminalId]);
-                unset($this->deviceStates[$terminalId]);
                 break;
             }
         }
 
+        // 4. Limpieza de memoria del servidor
         $key = array_search($s, $this->clients, true);
-        if ($key !== false) unset($this->clients[$key]);
-        
-        @socket_close($s);
+        if ($key !== false) {
+            unset($this->clients[$key]);
+        }
+
         unset($this->clientBuffers[$id], $this->clientProtocols[$id], $this->clientVersions[$id]);
-        $this->error("[DESC] Socket liberado (ID $id).");
+
+        $this->error("[DESC] Socket liberado y memoria limpia (ID $id).");
     }
 }
